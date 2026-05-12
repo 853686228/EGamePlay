@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ch07 — AbilityExecution 执行时间轴 | EGamePlay</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&family=Noto+Sans+SC:wght@400;600;700;900&family=JetBrains+Mono:wght@400;600&family=Playfair+Display:wght@900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="doc-layout">
+
+<!-- Sidebar -->
+<nav class="doc-sidebar">
+  <div class="nav-brand"><a href="index.html">EGamePlay</a></div>
+  <div class="nav-section">Chapters</div>
+  <ul class="nav-list">
+    <li><a href="ch01-ecsnode.html"><span class="ch-num">01</span> EcsNode 框架底座</a></li>
+    <li><a href="ch02-numeric.html"><span class="ch-num">02</span> 数值系统</a></li>
+    <li><a href="ch03-combat-entity.html"><span class="ch-num">03</span> 战斗实体</a></li>
+    <li><a href="ch04-ability.html"><span class="ch-num">04</span> 技能/Buff 核心</a></li>
+    <li><a href="ch05-effect.html"><span class="ch-num">05</span> 效果系统</a></li>
+    <li><a href="ch06-trigger.html"><span class="ch-num">06</span> 触发系统</a></li>
+    <li><a class="active" href="ch07-execution.html"><span class="ch-num">07</span> 执行时间轴</a></li>
+    <li><a href="ch08-action.html"><span class="ch-num">08</span> 行动系统</a></li>
+    <li><a href="ch09-config.html"><span class="ch-num">09</span> 配置管线</a></li>
+  </ul>
+  <div class="nav-section" style="margin-top:24px">本章目录</div>
+  <ul class="nav-list">
+    <li><a href="#entity">AbilityExecution 实体</a></li>
+    <li><a href="#execution-object">ExecutionObject 配置</a></li>
+    <li><a href="#clip-data">ExecuteClipData 结构</a></li>
+    <li><a href="#enums">执行枚举全览</a></li>
+    <li><a href="#system">AbilityExecutionSystem</a></li>
+    <li><a href="#timeline">时间轴可视化</a></li>
+    <li><a href="#projectile">弹道系统</a></li>
+    <li><a href="#action-event">ActionEventData 深度</a></li>
+  </ul>
+</nav>
+
+<!-- Main Content -->
+<main class="doc-main">
+<div class="ch-header">
+  <div class="ch-kicker">Chapter 07</div>
+  <h1>AbilityExecution — <span class="accent">执行时间轴</span></h1>
+  <p class="ch-subtitle">技能的视觉表现层。AbilityExecution 是一个时间轴驱动的执行器 — 它编排动画、粒子、音效、弹道和伤害判定的精确时序。策划在 ScriptableObject 中编辑时间轴，程序在运行时逐帧推进。</p>
+</div>
+
+<!-- ===== 1. AbilityExecution Entity ===== -->
+<h2 id="entity"><span class="num">7.1</span> AbilityExecution 实体</h2>
+
+<p>AbilityExecution 是 CombatEntity 的子实体，代表一次技能释放的完整过程。它的生命周期从技能开始施放到所有 Clip 执行完毕。</p>
+
+<pre class="code"><span class="file-tag">AbilityExecution.cs</span>
+<span class="kw">public class</span> <span class="tp">AbilityExecution</span> : <span class="tp">EcsEntity</span>
+{
+    <span class="cm">// ═══════════ 所有权 ═══════════</span>
+    <span class="kw">public</span> <span class="tp">CombatEntity</span> <span class="fn">OwnerEntity</span> { <span class="kw">get</span>; <span class="kw">set</span>; }       <span class="cm">// 施法者</span>
+    <span class="kw">public</span> <span class="tp">Ability</span> <span class="fn">AbilityEntity</span> { <span class="kw">get</span>; <span class="kw">set</span>; }           <span class="cm">// 关联的技能实体</span>
+
+    <span class="cm">// ═══════════ 配置数据 ═══════════</span>
+    <span class="kw">public</span> <span class="tp">ExecutionObject</span> <span class="fn">ExecutionObject</span> { <span class="kw">get</span>; <span class="kw">set</span>; } <span class="cm">// SO 配置（时间轴定义）</span>
+
+    <span class="cm">// ═══════════ 目标与输入 ═══════════</span>
+    <span class="kw">public</span> <span class="tp">List</span>&lt;<span class="tp">CombatEntity</span>&gt; <span class="fn">SkillTargets</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        = <span class="kw">new</span> <span class="tp">List</span>&lt;<span class="tp">CombatEntity</span>&gt;();                      <span class="cm">// 技能目标列表</span>
+    <span class="kw">public</span> <span class="tp">CombatEntity</span> <span class="fn">InputTarget</span> { <span class="kw">get</span>; <span class="kw">set</span>; }       <span class="cm">// 输入指定的目标</span>
+    <span class="kw">public</span> <span class="tp">Vector3</span> <span class="fn">InputPoint</span> { <span class="kw">get</span>; <span class="kw">set</span>; }             <span class="cm">// 输入指定的位置</span>
+    <span class="kw">public</span> <span class="tp">float</span> <span class="fn">InputDirection</span> { <span class="kw">get</span>; <span class="kw">set</span>; }            <span class="cm">// 输入指定的方向角度</span>
+
+    <span class="cm">// ═══════════ 行为占用 ═══════════</span>
+    <span class="kw">public</span> <span class="tp">ActionOccupy</span> <span class="fn">ActionOccupy</span> { <span class="kw">get</span>; <span class="kw">set</span>; }     <span class="cm">// 动作占用类型（施法中不可移动等）</span>
+
+    <span class="cm">// ═══════════ 时间轴 Clip 列表 ═══════════</span>
+    <span class="kw">public</span> <span class="tp">List</span>&lt;<span class="tp">ExecuteClipData</span>&gt; <span class="fn">ExecuteClips</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        = <span class="kw">new</span> <span class="tp">List</span>&lt;<span class="tp">ExecuteClipData</span>&gt;();                   <span class="cm">// 运行时 Clip 实例列表</span>
+
+    <span class="cm">// ═══════════ 运行时状态 ═══════════</span>
+    <span class="kw">public float</span> <span class="fn">TotalTime</span> { <span class="kw">get</span>; <span class="kw">set</span>; }                <span class="cm">// 时间轴总时长</span>
+    <span class="kw">public float</span> <span class="fn">CurrentTime</span> { <span class="kw">get</span>; <span class="kw">set</span>; }              <span class="cm">// 当前播放进度</span>
+}
+</pre>
+
+<table class="data">
+  <thead><tr><th>属性</th><th>类型</th><th>说明</th><th>生命周期</th></tr></thead>
+  <tbody>
+    <tr><td><code>OwnerEntity</code></td><td>CombatEntity</td><td>施法者</td><td>创建时设置</td></tr>
+    <tr><td><code>AbilityEntity</code></td><td>Ability</td><td>关联技能</td><td>创建时设置</td></tr>
+    <tr><td><code>ExecutionObject</code></td><td>ExecutionObject (SO)</td><td>时间轴配置</td><td>创建时设置</td></tr>
+    <tr><td><code>SkillTargets</code></td><td>List&lt;CombatEntity&gt;</td><td>技能命中的所有目标</td><td>碰撞检测时填充</td></tr>
+    <tr><td><code>InputTarget</code></td><td>CombatEntity</td><td>玩家锁定的目标</td><td>释放前设置</td></tr>
+    <tr><td><code>InputPoint</code></td><td>Vector3</td><td>玩家指定的位置</td><td>释放前设置</td></tr>
+    <tr><td><code>InputDirection</code></td><td>float</td><td>施法方向（角度）</td><td>释放前设置</td></tr>
+    <tr><td><code>ActionOccupy</code></td><td>ActionOccupy</td><td>行为占用声明</td><td>创建时设置</td></tr>
+    <tr><td><code>ExecuteClips</code></td><td>List&lt;ExecuteClipData&gt;</td><td>运行时 Clip 实例</td><td>Init 时从 SO 拷贝</td></tr>
+    <tr><td><code>TotalTime</code></td><td>float</td><td>总时长（秒）</td><td>从 SO 读取</td></tr>
+    <tr><td><code>CurrentTime</code></td><td>float</td><td>当前进度（秒）</td><td>每帧递增</td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <div class="callout-title">层级关系</div>
+  <pre style="margin:0;font-family:JetBrains Mono,monospace;font-size:13px;line-height:1.6">
+CombatEntity (施法者)
+ ├─ Ability (技能定义 — 持久存在)
+ │   ├─ AbilityEffect[0..N]
+ │   └─ AbilityTrigger[0..N]
+ └─ AbilityExecution (一次技能释放 — 临时存在)
+     ├─ ExecuteClip[0] (动画片段)
+     ├─ ExecuteClip[1] (粒子片段)
+     ├─ ExecuteClip[2] (ActionEvent 片段)
+     └─ ExecuteClip[3] (弹道物体片段)
+  </pre>
+  <br>
+  <strong>关键区别：</strong>Ability 是持久的（技能定义），AbilityExecution 是临时的（一次释放）。一个 Ability 可以在 CD 期间有多个 Execution 同时存在（如持续施法技能）。
+</div>
+
+<!-- ===== 2. ExecutionObject ===== -->
+<h2 id="execution-object"><span class="num">7.2</span> ExecutionObject — ScriptableObject 配置</h2>
+
+<p>ExecutionObject 是策划编辑的核心数据资产。它定义了一个技能释放的完整时间轴 — 什么时候播动画、什么时候出粒子、什么时候判定伤害。</p>
+
+<pre class="code"><span class="file-tag">ExecutionObject.cs — 完整结构</span>
+[<span class="tp">CreateAssetMenu</span>(fileName = <span class="st">"ExecutionObject"</span>, menuName = <span class="st">"EGamePlay/ExecutionObject"</span>)]
+<span class="kw">public class</span> <span class="tp">ExecutionObject</span> : <span class="tp">ScriptableObject</span>
+{
+    <span class="cm">// ═══════════ 基础标识 ═══════════</span>
+    <span class="kw">public int</span> <span class="fn">AbilityId</span>;                        <span class="cm">// 技能配置 ID（关联到 Ability）</span>
+
+    <span class="cm">// ═══════════ 时间轴 ═══════════</span>
+    <span class="kw">public float</span> <span class="fn">TotalTime</span> = <span class="nm">3f</span>;                 <span class="cm">// 总时长（秒）</span>
+
+    <span class="cm">// ═══════════ 视觉资源 ═══════════</span>
+    <span class="kw">public</span> <span class="tp">GameObject</span> <span class="fn">ObjAsset</span>;                  <span class="cm">// 主体预制件（技能特效/角色模型等）</span>
+
+    <span class="cm">// ═══════════ 输入类型 ═══════════</span>
+    <span class="kw">public</span> <span class="tp">TargetInputType</span> <span class="fn">TargetInputType</span>;     <span class="cm">// 技能的目标输入方式</span>
+
+    <span class="cm">// ═══════════ 指示器资源 ═══════════</span>
+    <span class="kw">public</span> <span class="tp">GameObject</span> <span class="fn">IndicatorAsset</span>;           <span class="cm">// 技能指示器预制件（释放前显示的范围圈）</span>
+    <span class="kw">public</span> <span class="tp">GameObject</span> <span class="fn">RangeIndicatorAsset</span>;      <span class="cm">// 范围指示器（如最大释放距离圈）</span>
+
+    <span class="cm">// ═══════════ 核心：Clip 列表 ═══════════</span>
+    <span class="hl"><span class="kw">public</span> <span class="tp">List</span>&lt;<span class="tp">ExecuteClipData</span>&gt; <span class="fn">ExecuteClips</span></span>
+    <span class="hl">    = <span class="kw">new</span> <span class="tp">List</span>&lt;<span class="tp">ExecuteClipData</span>&gt;();</span>            <span class="cm">// 所有时间轴片段</span>
+}
+</pre>
+
+<div class="callout">
+  <div class="callout-title">TargetInputType — 目标输入方式</div>
+  决定玩家如何指定技能目标：<br><br>
+  • <code>SelectTarget</code> — 选择一个敌方目标（点击式）<br>
+  • <code>SelectPoint</code> — 选择一个地面位置（AOE 圈）<br>
+  • <code>SelectDirection</code> — 选择一个方向（方向技能如 EZ Q）<br>
+  • <code>NoTarget</code> — 无需选择（自身为中心的 AOE）
+</div>
+
+<!-- ===== 3. ExecuteClipData ===== -->
+<h2 id="clip-data"><span class="num">7.3</span> ExecuteClipData — 时间轴片段</h2>
+
+<p>ExecuteClipData 是时间轴上的一个片段。每个片段有起止时间和类型特定的数据。这是整个 Execution 系统最核心的数据结构。</p>
+
+<pre class="code"><span class="file-tag">ExecuteClipData.cs — 完整结构</span>
+[<span class="tp">Serializable</span>]
+<span class="kw">public class</span> <span class="tp">ExecuteClipData</span>
+{
+    <span class="cm">// ═══════════ 时间区间 ═══════════</span>
+    <span class="kw">public float</span> <span class="fn">StartTime</span>;           <span class="cm">// 片段开始时间（秒）</span>
+    <span class="kw">public float</span> <span class="fn">EndTime</span>;             <span class="cm">// 片段结束时间（秒）</span>
+
+    <span class="cm">// ═══════════ 片段类型 ═══════════</span>
+    <span class="kw">public</span> <span class="tp">ExecuteClipType</span> <span class="fn">ExecuteClipType</span>;  <span class="cm">// 类型枚举</span>
+
+    <span class="cm">// ═══════════ 类型特定数据（根据 ExecuteClipType 选择使用哪个）═══════════</span>
+
+    <span class="cm">// ---- Animation ----</span>
+    <span class="kw">public</span> <span class="tp">AnimationData</span> <span class="fn">AnimationData</span>;
+
+    <span class="cm">// ---- Audio ----</span>
+    <span class="kw">public</span> <span class="tp">AudioData</span> <span class="fn">AudioData</span>;
+
+    <span class="cm">// ---- ParticleEffect ----</span>
+    <span class="kw">public</span> <span class="tp">ParticleEffectData</span> <span class="fn">ParticleEffectData</span>;
+
+    <span class="cm">// ---- ActionEvent（伤害/效果判定）----</span>
+    <span class="kw">public</span> <span class="tp">ActionEventData</span> <span class="fn">ActionEventData</span>;
+
+    <span class="cm">// ---- ItemExecute（弹道物体）----</span>
+    <span class="kw">public</span> <span class="tp">ItemData</span> <span class="fn">ItemData</span>;
+
+    <span class="cm">// ═══════════ 运行时状态 ═══════════</span>
+    [<span class="tp">NonSerialized</span>] <span class="kw">public bool</span> <span class="fn">HasStarted</span>;    <span class="cm">// 已开始</span>
+    [<span class="tp">NonSerialized</span>] <span class="kw">public bool</span> <span class="fn">HasEnded</span>;      <span class="cm">// 已结束</span>
+}
+</pre>
+
+<div class="section-label">AnimationData</div>
+<pre class="code"><span class="file-tag">AnimationData</span>
+[<span class="tp">Serializable</span>]
+<span class="kw">public class</span> <span class="tp">AnimationData</span>
+{
+    <span class="kw">public string</span> <span class="fn">AnimationClipName</span>;    <span class="cm">// 动画片段名（如 "Attack01"）</span>
+    <span class="kw">public float</span> <span class="fn">AnimationSpeed</span> = <span class="nm">1f</span>;  <span class="cm">// 播放速度</span>
+}
+</pre>
+
+<div class="section-label">AudioData</div>
+<pre class="code"><span class="file-tag">AudioData</span>
+[<span class="tp">Serializable</span>]
+<span class="kw">public class</span> <span class="tp">AudioData</span>
+{
+    <span class="kw">public</span> <span class="tp">AudioClip</span> <span class="fn">AudioClip</span>;    <span class="cm">// 音效资源</span>
+    <span class="kw">public float</span> <span class="fn">Volume</span> = <span class="nm">1f</span>;     <span class="cm">// 音量</span>
+}
+</pre>
+
+<div class="section-label">ParticleEffectData</div>
+<pre class="code"><span class="file-tag">ParticleEffectData</span>
+[<span class="tp">Serializable</span>]
+<span class="kw">public class</span> <span class="tp">ParticleEffectData</span>
+{
+    <span class="kw">public</span> <span class="tp">GameObject</span> <span class="fn">ParticlePrefab</span>;  <span class="cm">// 粒子特效预制件</span>
+    <span class="kw">public</span> <span class="tp">Vector3</span> <span class="fn">Offset</span>;             <span class="cm">// 相对偏移</span>
+    <span class="kw">public float</span> <span class="fn">Duration</span>;              <span class="cm">// 持续时间（0 = 跟随 Clip 时长）</span>
+}
+</pre>
+
+<div class="section-label">ActionEventData — 核心判定数据</div>
+<pre class="code"><span class="file-tag">ActionEventData — 完整结构</span>
+[<span class="tp">Serializable</span>]
+<span class="kw">public class</span> <span class="tp">ActionEventData</span>
+{
+    <span class="cm">// ═══════════ 触发方式 ═══════════</span>
+    <span class="kw">public</span> <span class="tp">FireType</span> <span class="fn">FireType</span>;
+    <span class="cm">//   StartTrigger         — Clip 开始时触发一次</span>
+    <span class="cm">//   CollisionTrigger     — 碰撞检测到目标时触发一次</span>
+    <span class="cm">//   EndTrigger           — Clip 结束时触发一次</span>
+    <span class="cm">//   CollisionTriggerMultiple — 碰撞检测持续触发（每帧/每目标）</span>
+
+    <span class="cm">// ═══════════ 效果类型 ═══════════</span>
+    <span class="kw">public</span> <span class="tp">ActionEventType</span> <span class="fn">ActionEventType</span>;
+    <span class="cm">//   AssignEffect         — 分配效果（走 Trigger → Effect 流程）</span>
+    <span class="cm">//   TriggerExecution     — 触发另一个 Execution（连锁技能）</span>
+
+    <span class="cm">// ═══════════ 关联配置 ═══════════</span>
+    <span class="kw">public</span> <span class="tp">ExecuteTriggerData</span> <span class="fn">ExecuteTrigger</span>;   <span class="cm">// 碰撞体配置（范围、形状等）</span>
+    <span class="kw">public</span> <span class="tp">EffectApplyTarget</span> <span class="fn">EffectApplyTarget</span>; <span class="cm">// 效果应用目标</span>
+    <span class="cm">//   Target              — 施法目标</span>
+    <span class="cm">//   Self                — 自身</span>
+    <span class="cm">//   SelfAndTarget       — 自身和目标</span>
+}
+</pre>
+
+<div class="section-label">ItemData — 弹道物体数据</div>
+<pre class="code"><span class="file-tag">ItemData — 完整结构</span>
+[<span class="tp">Serializable</span>]
+<span class="kw">public class</span> <span class="tp">ItemData</span>
+{
+    <span class="cm">// ═══════════ 执行类型 ═══════════</span>
+    <span class="kw">public</span> <span class="tp">ItemExecuteType</span> <span class="fn">ExecuteType</span>;       <span class="cm">// 物体执行类型</span>
+
+    <span class="cm">// ═══════════ 运动方式 ═══════════</span>
+    <span class="kw">public</span> <span class="tp">CollisionMoveType</span> <span class="fn">CollisionMoveType</span>; <span class="cm">// 运动轨迹类型</span>
+
+    <span class="cm">// ═══════════ 运动参数 ═══════════</span>
+    <span class="kw">public float</span> <span class="fn">Speed</span> = <span class="nm">10f</span>;                   <span class="cm">// 移动速度</span>
+    <span class="kw">public float</span> <span class="fn">Duration</span>;                       <span class="cm">// 最大存在时间</span>
+
+    <span class="cm">// ═══════════ 视觉资源 ═══════════</span>
+    <span class="kw">public</span> <span class="tp">GameObject</span> <span class="fn">ObjAsset</span>;                 <span class="cm">// 弹道物体预制件</span>
+
+    <span class="cm">// ═══════════ 碰撞配置 ═══════════</span>
+    <span class="kw">public</span> <span class="tp">ExecuteTriggerData</span> <span class="fn">CollisionTrigger</span>; <span class="cm">// 碰撞检测配置</span>
+}
+</pre>
+
+<div class="callout warn">
+  <div class="callout-title">Union-style 数据结构</div>
+  ExecuteClipData 同时持有所有类型的数据字段（AnimationData、AudioData、ActionEventData、ItemData），只根据 <code>ExecuteClipType</code> 使用对应的一个。<br><br>
+  <strong>优点：</strong>Inspector 中可以直接编辑所有字段，序列化/反序列化简单<br>
+  <strong>缺点：</strong>每个 Clip 实例都携带其他类型的空字段，有少量内存浪费<br><br>
+  对于 SO 资产来说这完全可以接受 — 一个技能最多十几个 Clip，不是 hot path。
+</div>
+
+<!-- ===== 4. Enums ===== -->
+<h2 id="enums"><span class="num">7.4</span> 执行枚举全览</h2>
+
+<div class="section-label">ExecuteClipType — 片段类型</div>
+<table class="data">
+  <thead><tr><th>枚举值</th><th>用途</th><th>使用的数据字段</th><th>示例</th></tr></thead>
+  <tbody>
+    <tr><td><code>Animation</code></td><td>播放角色动画</td><td>AnimationData</td><td>"Attack01" 挥砍动画</td></tr>
+    <tr><td><code>Audio</code></td><td>播放音效</td><td>AudioData</td><td>刀光音效</td></tr>
+    <tr><td><code>ParticleEffect</code></td><td>播放粒子特效</td><td>ParticleEffectData</td><td>技能命中火焰爆炸</td></tr>
+    <tr><td><code>ActionEvent</code></td><td>伤害/效果判定</td><td>ActionEventData</td><td>碰撞检测 + 造成伤害</td></tr>
+    <tr><td><code>ItemExecute</code></td><td>生成弹道物体</td><td>ItemData</td><td>射出一支箭/飞弹</td></tr>
+  </tbody>
+</table>
+
+<div class="section-label">CollisionMoveType — 弹道运动类型</div>
+<table class="data">
+  <thead><tr><th>枚举值</th><th>运动行为</th><th>典型技能</th></tr></thead>
+  <tbody>
+    <tr><td><code>FixedPosition</code></td><td>固定在指定位置不动（AOE 区域）</td><td>火女 W（燃烧地面）</td></tr>
+    <tr><td><code>FollowOwner</code></td><td>跟随施法者移动</td><td>日女 W（旋转太阳）</td></tr>
+    <tr><td><code>FollowTarget</code></td><td>追踪目标移动（锁定弹道）</td><td>阿狸 W（狐火）</td></tr>
+    <tr><td><code>SelectedDirection</code></td><td>朝指定方向匀速飞行</td><td>EZ Q（方向性弹道）</td></tr>
+    <tr><td><code>PathFly</code></td><td>沿预定义路径飞行</td><td>德莱文 R（回旋斧）</td></tr>
+    <tr><td><code>Bezier</code></td><td>贝塞尔曲线飞行</td><td>锤石 Q（弧线钩）</td></tr>
+  </tbody>
+</table>
+
+<div class="section-label">FireType — 判定触发时机</div>
+<table class="data">
+  <thead><tr><th>枚举值</th><th>触发时机</th><th>触发次数</th><th>用途</th></tr></thead>
+  <tbody>
+    <tr><td><code>StartTrigger</code></td><td>Clip 开始时</td><td>一次</td><td>瞬发技能伤害判定</td></tr>
+    <tr><td><code>CollisionTrigger</code></td><td>碰撞到目标时</td><td>一次（每目标）</td><td>单体弹道命中</td></tr>
+    <tr><td><code>EndTrigger</code></td><td>Clip 结束时</td><td>一次</td><td>延迟爆炸效果</td></tr>
+    <tr><td><code>CollisionTriggerMultiple</code></td><td>碰撞期间持续</td><td>多次</td><td>持续伤害区域</td></tr>
+  </tbody>
+</table>
+
+<div class="section-label">TargetInputType — 技能输入方式</div>
+<table class="data">
+  <thead><tr><th>枚举值</th><th>玩家操作</th><th>示例</th></tr></thead>
+  <tbody>
+    <tr><td><code>SelectTarget</code></td><td>点击选择一个目标单位</td><td>点击式单体技能</td></tr>
+    <tr><td><code>SelectPoint</code></td><td>点击选择地面一个位置</td><td>AOE 圈（如火男 W）</td></tr>
+    <tr><td><code>SelectDirection</code></td><td>拖动选择一个方向</td><td>方向性技能（如 EZ Q）</td></tr>
+    <tr><td><code>NoTarget</code></td><td>无需选择，直接释放</td><td>以自身为中心 AOE</td></tr>
+  </tbody>
+</table>
+
+<!-- ===== 5. AbilityExecutionSystem ===== -->
+<h2 id="system"><span class="num">7.5</span> AbilityExecutionSystem — 执行系统</h2>
+
+<p>AbilityExecutionSystem 管理 Execution 的生命周期：创建 → 启动时间轴 → 每帧推进 Clip → 结束销毁。</p>
+
+<pre class="code"><span class="file-tag">AbilityExecutionSystem.cs — 核心逻辑</span>
+<span class="kw">public class</span> <span class="tp">AbilityExecutionSystem</span> : <span class="tp">AEntitySystem</span>&lt;<span class="tp">AbilityExecution</span>&gt;,
+    <span class="tp">IAwake</span>&lt;<span class="tp">AbilityExecution</span>&gt;,
+    <span class="tp">IUpdate</span>&lt;<span class="tp">AbilityExecution</span>&gt;,
+    <span class="tp">IDestroy</span>&lt;<span class="tp">AbilityExecution</span>&gt;
+{
+    <span class="cm">// ═══════════ 创建 ═══════════</span>
+    <span class="kw">public void</span> <span class="fn">Awake</span>(<span class="tp">AbilityExecution</span> entity)
+    {
+        <span class="kw">var</span> execObj = entity.ExecutionObject;
+
+        <span class="cm">// 从 SO 拷贝 Clip 数据到运行时实例</span>
+        entity.TotalTime = execObj.TotalTime;
+        entity.CurrentTime = <span class="nm">0f</span>;
+
+        <span class="kw">foreach</span> (<span class="kw">var</span> clipData <span class="kw">in</span> execObj.ExecuteClips)
+        {
+            <span class="kw">var</span> runtimeClip = <span class="fn">CloneClipData</span>(clipData);
+            runtimeClip.HasStarted = <span class="kw">false</span>;
+            runtimeClip.HasEnded = <span class="kw">false</span>;
+            entity.ExecuteClips.Add(runtimeClip);
+        }
+
+        <span class="cm">// 实例化视觉对象（如果有）</span>
+        <span class="kw">if</span> (execObj.ObjAsset != <span class="kw">null</span>)
+        {
+            <span class="cm">// Instantiate 主体预制件</span>
+        }
+    }
+
+    <span class="cm">// ═══════════ 每帧推进时间轴 ═══════════</span>
+    <span class="kw">public void</span> <span class="fn">Update</span>(<span class="tp">AbilityExecution</span> entity)
+    {
+        entity.CurrentTime += <span class="tp">Time</span>.deltaTime;
+
+        <span class="cm">// 遍历所有 Clip，检查是否该触发</span>
+        <span class="kw">foreach</span> (<span class="kw">var</span> clip <span class="kw">in</span> entity.ExecuteClips)
+        {
+            <span class="cm">// Clip 尚未开始 且 当前时间已到达 StartTime</span>
+            <span class="hl"><span class="kw">if</span> (!clip.HasStarted && entity.CurrentTime >= clip.StartTime)</span>
+            {
+                clip.HasStarted = <span class="kw">true</span>;
+                <span class="fn">OnClipStart</span>(entity, clip);
+            }
+
+            <span class="cm">// Clip 已开始、尚未结束 且 当前时间已到达 EndTime</span>
+            <span class="hl"><span class="kw">if</span> (clip.HasStarted && !clip.HasEnded && entity.CurrentTime >= clip.EndTime)</span>
+            {
+                clip.HasEnded = <span class="kw">true</span>;
+                <span class="fn">OnClipEnd</span>(entity, clip);
+            }
+
+            <span class="cm">// Clip 正在活跃期间（已开始、未结束）— 持续更新</span>
+            <span class="kw">if</span> (clip.HasStarted && !clip.HasEnded)
+            {
+                <span class="fn">OnClipUpdate</span>(entity, clip);
+            }
+        }
+
+        <span class="cm">// 时间轴结束 → 销毁 Execution</span>
+        <span class="kw">if</span> (entity.CurrentTime >= entity.TotalTime)
+        {
+            entity.Parent.<span class="fn">RemoveChild</span>(entity);
+        }
+    }
+
+    <span class="cm">// ═══════════ Clip 开始 ═══════════</span>
+    <span class="kw">private void</span> <span class="fn">OnClipStart</span>(<span class="tp">AbilityExecution</span> entity, <span class="tp">ExecuteClipData</span> clip)
+    {
+        <span class="kw">switch</span> (clip.ExecuteClipType)
+        {
+            <span class="kw">case</span> <span class="tp">ExecuteClipType</span>.<span class="fn">Animation</span>:
+                <span class="cm">// 播放动画：设置 Animator 参数</span>
+                <span class="fn">PlayAnimation</span>(entity, clip.AnimationData);
+                <span class="kw">break</span>;
+
+            <span class="kw">case</span> <span class="tp">ExecuteClipType</span>.<span class="fn">Audio</span>:
+                <span class="cm">// 播放音效</span>
+                <span class="fn">PlayAudio</span>(clip.AudioData);
+                <span class="kw">break</span>;
+
+            <span class="kw">case</span> <span class="tp">ExecuteClipType</span>.<span class="fn">ParticleEffect</span>:
+                <span class="cm">// 实例化粒子特效</span>
+                <span class="fn">SpawnParticle</span>(entity, clip.ParticleEffectData);
+                <span class="kw">break</span>;
+
+            <span class="kw">case</span> <span class="tp">ExecuteClipType</span>.<span class="fn">ActionEvent</span>:
+                <span class="cm">// 如果是 StartTrigger 类型，立即触发效果</span>
+                <span class="kw">if</span> (clip.ActionEventData.FireType == <span class="tp">FireType</span>.<span class="fn">StartTrigger</span>)
+                {
+                    <span class="fn">FireActionEvent</span>(entity, clip.ActionEventData);
+                }
+                <span class="cm">// CollisionTrigger 类型 — 创建碰撞检测区域</span>
+                <span class="kw">else</span>
+                {
+                    <span class="fn">CreateCollisionTrigger</span>(entity, clip);
+                }
+                <span class="kw">break</span>;
+
+            <span class="kw">case</span> <span class="tp">ExecuteClipType</span>.<span class="fn">ItemExecute</span>:
+                <span class="cm">// 生成弹道物体</span>
+                <span class="fn">SpawnItem</span>(entity, clip.ItemData);
+                <span class="kw">break</span>;
+        }
+    }
+
+    <span class="cm">// ═══════════ Clip 结束 ═══════════</span>
+    <span class="kw">private void</span> <span class="fn">OnClipEnd</span>(<span class="tp">AbilityExecution</span> entity, <span class="tp">ExecuteClipData</span> clip)
+    {
+        <span class="kw">switch</span> (clip.ExecuteClipType)
+        {
+            <span class="kw">case</span> <span class="tp">ExecuteClipType</span>.<span class="fn">ActionEvent</span>:
+                <span class="kw">if</span> (clip.ActionEventData.FireType == <span class="tp">FireType</span>.<span class="fn">EndTrigger</span>)
+                {
+                    <span class="fn">FireActionEvent</span>(entity, clip.ActionEventData);
+                }
+                <span class="cm">// 销毁碰撞检测区域</span>
+                <span class="fn">DestroyCollisionTrigger</span>(clip);
+                <span class="kw">break</span>;
+
+            <span class="kw">case</span> <span class="tp">ExecuteClipType</span>.<span class="fn">ParticleEffect</span>:
+                <span class="cm">// 停止粒子发射（让已有粒子自然消亡）</span>
+                <span class="kw">break</span>;
+        }
+    }
+
+    <span class="cm">// ═══════════ Clip 持续更新（活跃期间每帧调用）═══════════</span>
+    <span class="kw">private void</span> <span class="fn">OnClipUpdate</span>(<span class="tp">AbilityExecution</span> entity, <span class="tp">ExecuteClipData</span> clip)
+    {
+        <span class="kw">if</span> (clip.ExecuteClipType == <span class="tp">ExecuteClipType</span>.<span class="fn">ActionEvent</span>)
+        {
+            <span class="kw">if</span> (clip.ActionEventData.FireType == <span class="tp">FireType</span>.<span class="fn">CollisionTriggerMultiple</span>)
+            {
+                <span class="cm">// 持续碰撞检测 — 每帧检查新进入的目标</span>
+                <span class="fn">UpdateCollisionTrigger</span>(entity, clip);
+            }
+        }
+    }
+
+    <span class="cm">// ═══════════ 销毁 ═══════════</span>
+    <span class="kw">public void</span> <span class="fn">Destroy</span>(<span class="tp">AbilityExecution</span> entity)
+    {
+        <span class="cm">// 清理所有视觉对象</span>
+        <span class="cm">// 释放 ActionOccupy（解除施法锁定）</span>
+    }
+}
+</pre>
+
+<div class="callout good">
+  <div class="callout-title">设计洞察 — 时间驱动而非事件驱动</div>
+  Execution 的核心循环极其简单：每帧检查 <code>CurrentTime</code> 是否到达各 Clip 的 StartTime/EndTime。<br><br>
+  不用协程、不用 Invoke、不用事件链。一个 Update 里一个 foreach，清晰透明。<br>
+  想知道技能第 0.5 秒发生了什么？看 Clip 列表中 StartTime ≤ 0.5 ≤ EndTime 的那些 Clip 就行了。<br><br>
+  <strong>调试友好度极高</strong> — 暂停游戏后看 CurrentTime 和各 Clip 的 HasStarted/HasEnded 状态就能完全还原执行进度。
+</div>
+
+<!-- ===== 6. Timeline Visualization ===== -->
+<h2 id="timeline"><span class="num">7.6</span> 时间轴可视化</h2>
+
+<p>一个典型的战士 Q 技能（挥砍 + 伤害判定 + 音效 + 粒子）的时间轴布局：</p>
+
+<div class="section-label">时间轴示意图</div>
+<pre class="code"><span class="file-tag">战士 Q 技能 — TotalTime: 1.2s</span>
+时间(s):  0.0    0.1    0.2    0.3    0.4    0.5    0.6    0.7    0.8    0.9    1.0    1.1    1.2
+          │      │      │      │      │      │      │      │      │      │      │      │      │
+<span class="fn">Animation</span> ├══════════════════════════════════════════════════════════════════════════════════════┤
+          │ "Attack01" (speed:1.0)                                                             │
+          │      │      │      │      │      │      │      │      │      │      │      │      │
+<span class="fn">Audio</span>     │      │      ├════════════┤      │      │      │      │      │      │      │      │
+          │      │      │ SwingSFX   │      │      │      │      │      │      │      │      │
+          │      │      │      │      │      │      │      │      │      │      │      │      │
+<span class="fn">Particle</span>  │      │      │      │ ├══════════════════┤      │      │      │      │      │      │
+          │      │      │      │ │ SlashTrail       │      │      │      │      │      │      │
+          │      │      │      │      │      │      │      │      │      │      │      │      │
+<span class="tp">ActionEvt</span> │      │      │      ├════┤      │      │      │      │      │      │      │      │
+          │      │      │      │<span class="hl">FIRE</span> │      │      │      │      │      │      │      │      │
+          │      │      │      │      │      │      │      │      │      │      │      │      │
+          ▼      ▼      ▼      ▼      ▼      ▼      ▼      ▼      ▼      ▼      ▼      ▼      ▼
+</pre>
+
+<div class="callout">
+  <div class="callout-title">读图说明</div>
+  • <strong>Animation</strong> (0.0s ~ 1.2s)：整个技能期间播放 "Attack01" 动画<br>
+  • <strong>Audio</strong> (0.2s ~ 0.4s)：动画摆刀到位时播放挥砍音效<br>
+  • <strong>Particle</strong> (0.3s ~ 0.7s)：刀光轨迹粒子效果<br>
+  • <strong>ActionEvent</strong> (0.3s ~ 0.4s)：伤害判定窗口（StartTrigger 在 0.3s 触发）<br><br>
+  注意伤害判定并不在动画的第一帧 — 而是在刀挥到目标位置的时候（0.3s）。这就是时间轴系统的意义：<strong>精确控制视觉和逻辑的时序对齐</strong>。
+</div>
+
+<div class="section-label">弹道技能的时间轴</div>
+<pre class="code"><span class="file-tag">EZ Q 方向弹道 — TotalTime: 2.0s</span>
+时间(s):  0.0    0.2    0.4    0.6    0.8    1.0    1.2    1.4    1.6    1.8    2.0
+          │      │      │      │      │      │      │      │      │      │      │
+<span class="fn">Animation</span> ├══════════════┤      │      │      │      │      │      │      │      │
+          │ "CastQ"     │      │      │      │      │      │      │      │      │
+          │      │      │      │      │      │      │      │      │      │      │
+<span class="fn">Audio</span>     │ ├════┤      │      │      │      │      │      │      │      │      │
+          │ │Cast│      │      │      │      │      │      │      │      │      │
+          │      │      │      │      │      │      │      │      │      │      │
+<span class="fn">Item</span>      │      ├════════════════════════════════════════════════════════════════┤
+          │      │ Projectile (SelectedDirection, Speed:20)                       │
+          │      │ [弹道物体自带 CollisionTrigger → 命中后 FireActionEvent]        │
+          │      │      │      │      │      │      │      │      │      │      │
+<span class="fn">Particle</span>  │ ├════════════┤      │      │      │      │      │      │      │      │
+          │ │ MuzzleFlash│      │      │      │      │      │      │      │      │
+          ▼      ▼      ▼      ▼      ▼      ▼      ▼      ▼      ▼      ▼      ▼
+</pre>
+
+<div class="callout warn">
+  <div class="callout-title">弹道技能 vs 近战技能的区别</div>
+  • <strong>近战技能：</strong>ActionEvent Clip 直接执行碰撞检测 + 效果判定<br>
+  • <strong>弹道技能：</strong>ItemExecute Clip 生成飞行物体，物体<strong>自身</strong>携带碰撞检测逻辑。命中目标时才触发效果。<br><br>
+  Execution 时间轴不等待弹道命中 — 它只管「在正确的时刻射出弹道物体」，之后弹道物体自己管自己的生命周期。
+</div>
+
+<!-- ===== 7. Projectile System ===== -->
+<h2 id="projectile"><span class="num">7.7</span> 弹道系统 — ItemExecute</h2>
+
+<p>当 ItemExecute Clip 开始时，系统生成一个弹道物体实体。这个实体有自己的运动组件和碰撞检测，独立于 Execution 时间轴生存。</p>
+
+<pre class="code"><span class="file-tag">弹道物体生成流程</span>
+<span class="kw">private void</span> <span class="fn">SpawnItem</span>(<span class="tp">AbilityExecution</span> execution, <span class="tp">ItemData</span> itemData)
+{
+    <span class="cm">// 1. 实例化弹道物体 GO</span>
+    <span class="kw">var</span> itemObj = Object.Instantiate(itemData.ObjAsset);
+    itemObj.transform.position = execution.OwnerEntity.Position;
+
+    <span class="cm">// 2. 创建弹道实体</span>
+    <span class="kw">var</span> itemEntity = execution.<span class="fn">AddChild</span>&lt;<span class="tp">ExecuteItemEntity</span>&gt;(x =>
+    {
+        x.ItemData = itemData;
+        x.OwnerExecution = execution;
+        x.GameObject = itemObj;
+        x.Speed = itemData.Speed;
+        x.Duration = itemData.Duration;
+    });
+
+    <span class="cm">// 3. 根据 CollisionMoveType 设置运动行为</span>
+    <span class="kw">switch</span> (itemData.CollisionMoveType)
+    {
+        <span class="kw">case</span> <span class="tp">CollisionMoveType</span>.<span class="fn">FixedPosition</span>:
+            <span class="cm">// 放置在 InputPoint 位置，不移动</span>
+            itemObj.transform.position = execution.InputPoint;
+            <span class="kw">break</span>;
+
+        <span class="kw">case</span> <span class="tp">CollisionMoveType</span>.<span class="fn">FollowOwner</span>:
+            <span class="cm">// 每帧同步到施法者位置</span>
+            itemEntity.<span class="fn">AddComponent</span>&lt;<span class="tp">FollowOwnerComponent</span>&gt;();
+            <span class="kw">break</span>;
+
+        <span class="kw">case</span> <span class="tp">CollisionMoveType</span>.<span class="fn">FollowTarget</span>:
+            <span class="cm">// 追踪 InputTarget，到达后触发碰撞</span>
+            itemEntity.<span class="fn">AddComponent</span>&lt;<span class="tp">FollowTargetComponent</span>&gt;(comp =>
+            {
+                comp.Target = execution.InputTarget;
+            });
+            <span class="kw">break</span>;
+
+        <span class="kw">case</span> <span class="tp">CollisionMoveType</span>.<span class="fn">SelectedDirection</span>:
+            <span class="cm">// 朝 InputDirection 方向匀速飞行</span>
+            itemEntity.<span class="fn">AddComponent</span>&lt;<span class="tp">DirectionMoveComponent</span>&gt;(comp =>
+            {
+                comp.Direction = execution.InputDirection;
+                comp.Speed = itemData.Speed;
+            });
+            <span class="kw">break</span>;
+
+        <span class="kw">case</span> <span class="tp">CollisionMoveType</span>.<span class="fn">PathFly</span>:
+            <span class="cm">// 沿路径点列表飞行</span>
+            itemEntity.<span class="fn">AddComponent</span>&lt;<span class="tp">PathFlyComponent</span>&gt;();
+            <span class="kw">break</span>;
+
+        <span class="kw">case</span> <span class="tp">CollisionMoveType</span>.<span class="fn">Bezier</span>:
+            <span class="cm">// 贝塞尔曲线飞行（起点 → 控制点 → 目标）</span>
+            itemEntity.<span class="fn">AddComponent</span>&lt;<span class="tp">BezierMoveComponent</span>&gt;(comp =>
+            {
+                comp.Target = execution.InputTarget;
+                comp.ControlPointHeight = <span class="nm">3f</span>;  <span class="cm">// 弧线高度</span>
+            });
+            <span class="kw">break</span>;
+    }
+
+    <span class="cm">// 4. 添加碰撞检测组件</span>
+    <span class="kw">if</span> (itemData.CollisionTrigger != <span class="kw">null</span>)
+    {
+        itemEntity.<span class="fn">AddComponent</span>&lt;<span class="tp">CollisionDetectComponent</span>&gt;(comp =>
+        {
+            comp.TriggerData = itemData.CollisionTrigger;
+            comp.OnCollision = (target) => <span class="fn">OnItemCollision</span>(execution, itemEntity, target);
+        });
+    }
+}
+</pre>
+
+<div class="section-label">各 CollisionMoveType 运动行为详解</div>
+<div class="card-grid">
+  <div class="card">
+    <div class="card-title">FixedPosition</div>
+    <div class="card-body">弹道物体生成后固定在 <code>InputPoint</code> 位置。持续存在直到 Duration 到期。<br><br><strong>用途：</strong>AOE 区域技能（如燃烧地面、毒圈）。碰撞检测持续运行，每帧检查范围内的目标。</div>
+  </div>
+  <div class="card green">
+    <div class="card-title">FollowTarget</div>
+    <div class="card-body">每帧向 <code>InputTarget</code> 位置移动。到达目标后触发碰撞回调并自动销毁。<br><br><strong>用途：</strong>追踪弹道（如阿狸 W 狐火）。目标无法通过移动闪避。速度决定追踪延迟。</div>
+  </div>
+  <div class="card warn">
+    <div class="card-title">SelectedDirection</div>
+    <div class="card-body">朝 <code>InputDirection</code> 方向以 <code>Speed</code> 匀速飞行。碰到第一个目标后触发碰撞（或飞到 Duration 上限销毁）。<br><br><strong>用途：</strong>方向性弹道（如 EZ Q）。可以被闪避。</div>
+  </div>
+  <div class="card">
+    <div class="card-title">Bezier</div>
+    <div class="card-body">沿贝塞尔曲线从施法者飞向目标。曲线的高度/弧度由控制点参数决定。<br><br><strong>用途：</strong>弧线弹道（如锤石 Q、高抛技能）。视觉上更有冲击力。</div>
+  </div>
+</div>
+
+<pre class="code"><span class="file-tag">弹道命中回调</span>
+<span class="kw">private static void</span> <span class="fn">OnItemCollision</span>(
+    <span class="tp">AbilityExecution</span> execution,
+    <span class="tp">ExecuteItemEntity</span> item,
+    <span class="tp">CombatEntity</span> target)
+{
+    <span class="cm">// 命中目标后执行 ActionEvent 效果</span>
+    <span class="kw">var</span> actionEventData = item.ItemData.ActionEventData;
+    <span class="kw">if</span> (actionEventData != <span class="kw">null</span>)
+    {
+        <span class="fn">FireActionEvent</span>(execution, actionEventData, target);
+    }
+
+    <span class="cm">// 生成命中粒子特效</span>
+    <span class="kw">if</span> (item.ItemData.HitParticle != <span class="kw">null</span>)
+    {
+        Object.Instantiate(item.ItemData.HitParticle, target.Position, <span class="tp">Quaternion</span>.identity);
+    }
+
+    <span class="cm">// 弹道消亡（单体弹道命中后销毁）</span>
+    item.Parent.<span class="fn">RemoveChild</span>(item);
+}
+</pre>
+
+<!-- ===== 8. ActionEventData Deep Dive ===== -->
+<h2 id="action-event"><span class="num">7.8</span> ActionEventData — 视觉与逻辑的桥梁</h2>
+
+<p>ActionEventData 是 Execution 时间轴中最重要的 Clip 类型 — 它是视觉表现层和战斗逻辑层的<strong>唯一连接点</strong>。</p>
+
+<div class="callout">
+  <div class="callout-title">核心职责</div>
+  ActionEvent 回答一个关键问题：<strong>「在时间轴的某个精确时刻，对谁执行什么效果？」</strong><br><br>
+  它把视觉时间轴（动画播到第几帧）映射到逻辑操作（触发 AbilityTrigger → 执行 Effect → 创建 Action）。
+</div>
+
+<div class="section-label">FireActionEvent 执行流程</div>
+<pre class="code"><span class="file-tag">FireActionEvent — 从时间轴到效果系统</span>
+<span class="kw">private static void</span> <span class="fn">FireActionEvent</span>(
+    <span class="tp">AbilityExecution</span> execution,
+    <span class="tp">ActionEventData</span> actionEvent,
+    <span class="tp">CombatEntity</span> collisionTarget = <span class="kw">null</span>)
+{
+    <span class="cm">// Step 1: 确定目标</span>
+    <span class="tp">CombatEntity</span> target = <span class="kw">null</span>;
+    <span class="kw">switch</span> (actionEvent.EffectApplyTarget)
+    {
+        <span class="kw">case</span> <span class="tp">EffectApplyTarget</span>.<span class="fn">Target</span>:
+            target = collisionTarget ?? execution.InputTarget;
+            <span class="kw">break</span>;
+        <span class="kw">case</span> <span class="tp">EffectApplyTarget</span>.<span class="fn">Self</span>:
+            target = execution.OwnerEntity;
+            <span class="kw">break</span>;
+        <span class="kw">case</span> <span class="tp">EffectApplyTarget</span>.<span class="fn">SelfAndTarget</span>:
+            <span class="cm">// 先对自身执行，再对目标执行</span>
+            <span class="fn">ApplyEffect</span>(execution, execution.OwnerEntity);
+            target = collisionTarget ?? execution.InputTarget;
+            <span class="kw">break</span>;
+    }
+
+    <span class="kw">if</span> (target == <span class="kw">null</span>) <span class="kw">return</span>;
+
+    <span class="cm">// Step 2: 根据 ActionEventType 选择执行方式</span>
+    <span class="kw">switch</span> (actionEvent.ActionEventType)
+    {
+        <span class="kw">case</span> <span class="tp">ActionEventType</span>.<span class="fn">AssignEffect</span>:
+            <span class="cm">// 走 Trigger → Effect → Action 标准流程</span>
+            <span class="fn">ApplyEffect</span>(execution, target);
+            <span class="kw">break</span>;
+
+        <span class="kw">case</span> <span class="tp">ActionEventType</span>.<span class="fn">TriggerExecution</span>:
+            <span class="cm">// 触发另一个 Execution（连锁技能/子技能）</span>
+            <span class="fn">TriggerSubExecution</span>(execution, target, actionEvent);
+            <span class="kw">break</span>;
+    }
+}
+
+<span class="kw">private static void</span> <span class="fn">ApplyEffect</span>(<span class="tp">AbilityExecution</span> execution, <span class="tp">CombatEntity</span> target)
+{
+    <span class="cm">// 获取关联的 Ability 的 Trigger</span>
+    <span class="kw">var</span> ability = execution.AbilityEntity;
+
+    <span class="cm">// 对每个 Trigger 调用 OnTrigger — 传入碰撞目标作为 Context.Target</span>
+    <span class="kw">foreach</span> (<span class="kw">var</span> trigger <span class="kw">in</span> ability.AbilityTriggers)
+    {
+        <span class="tp">AbilityTriggerSystem</span>.<span class="fn">OnTrigger</span>(trigger,
+            <span class="kw">new</span> <span class="tp">TriggerContext</span> { Target = target });
+    }
+}
+</pre>
+
+<div class="flow flow-v">
+  <div class="flow-row">
+    <div class="flow-node blue">Execution 时间轴推进到 Clip.StartTime</div>
+    <span class="flow-label">如 0.3s（动画挥刀到位）</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node purple">OnClipStart → ActionEvent (StartTrigger)</div>
+    <span class="flow-label">或 碰撞检测命中 → CollisionTrigger</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node cyan">FireActionEvent(execution, actionEventData, target)</div>
+    <span class="flow-label">确定目标 + 选择执行方式</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node green">ApplyEffect → AbilityTriggerSystem.OnTrigger</div>
+    <span class="flow-label">从 Execution 层进入 Trigger 层</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node warn">Trigger → StateCheck → EffectAssignAction</div>
+    <span class="flow-label">标准触发流程（见 Ch06）</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node red">DamageAction / CureAction / AddBuffAction</div>
+    <span class="flow-label">最终执行伤害/治疗/加 Buff</span>
+  </div>
+</div>
+
+<div class="callout good">
+  <div class="callout-title">设计洞察 — 关注点分离</div>
+  整个执行流水线有清晰的分层：<br><br>
+  <strong>Execution 层（本章）：</strong>回答「什么时候触发、目标是谁」<br>
+  <strong>Trigger 层（Ch06）：</strong>回答「条件是否满足」<br>
+  <strong>Effect 层（Ch05）：</strong>回答「做什么操作」<br>
+  <strong>Action 层（Ch08）：</strong>回答「怎么做、做完后广播什么」<br><br>
+  每一层只关心自己的一个问题。<code>ActionEventData</code> 是从 Execution 层到 Trigger 层的桥梁 — 它把「时间轴上的一个时刻」转化为「一次触发调用」。
+</div>
+
+<div class="section-label">FireType 选择指南</div>
+<table class="data">
+  <thead><tr><th>FireType</th><th>何时用</th><th>碰撞检测</th><th>典型示例</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>StartTrigger</code></td>
+      <td>瞬发伤害，无需碰撞检测</td>
+      <td>无</td>
+      <td>指定目标的单体技能、自身 Buff</td>
+    </tr>
+    <tr>
+      <td><code>CollisionTrigger</code></td>
+      <td>需要范围检测但只触发一次</td>
+      <td>一次性检测</td>
+      <td>近战挥砍（扇形范围内所有敌人各受一次伤害）</td>
+    </tr>
+    <tr>
+      <td><code>EndTrigger</code></td>
+      <td>延迟判定（蓄力后爆炸）</td>
+      <td>无</td>
+      <td>蓄力技能在 Clip 结束时爆炸</td>
+    </tr>
+    <tr>
+      <td><code>CollisionTriggerMultiple</code></td>
+      <td>持续伤害区域</td>
+      <td>每帧/每 tick</td>
+      <td>火焰地面（停留在区域内持续受伤）</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="card-grid">
+  <div class="card">
+    <div class="card-title">Execution 完整生命周期</div>
+    <div class="card-body">
+      1. 玩家按 Q → 创建 AbilityExecution 实体<br>
+      2. Awake: 拷贝 SO 数据、实例化视觉对象<br>
+      3. Update: 每帧推进 CurrentTime，触发到时的 Clip<br>
+      4. Clip 触发: 播动画/音效/粒子/生成弹道/判定伤害<br>
+      5. TotalTime 到达 → RemoveChild → Destroy<br>
+      6. 清理视觉对象、释放行为占用
+    </div>
+  </div>
+  <div class="card green">
+    <div class="card-title">与 Ability 的关系</div>
+    <div class="card-body">
+      • Ability 是<strong>定义</strong>（一直存在）<br>
+      • Execution 是<strong>执行</strong>（临时存在）<br>
+      • 每次释放技能 = 创建一个新 Execution<br>
+      • CD 管理在 Ability 层，不在 Execution 层<br>
+      • Execution 不关心 CD — 它只关心「被创建后如何执行」
+    </div>
+  </div>
+  <div class="card warn">
+    <div class="card-title">已知限制</div>
+    <div class="card-body">
+      • 不支持时间轴倒放/暂停/变速（只能匀速前进）<br>
+      • Clip 不能跨 TotalTime 边界（EndTime 必须 ≤ TotalTime）<br>
+      • 弹道物体的生命周期独立于 Execution — Execution 销毁后弹道仍在飞<br>
+      • 无法在运行时动态增删 Clip（SO 是只读的）
+    </div>
+  </div>
+  <div class="card bad">
+    <div class="card-title">性能注意</div>
+    <div class="card-body">
+      • 每帧遍历所有 Clip 的 O(N) 开销在 Clip 少时可忽略<br>
+      • 弹道物体多时（如乱战中大量飞弹）注意 GameObject 实例化开销<br>
+      • CollisionTriggerMultiple 每帧做碰撞检测 — 范围越大开销越高<br>
+      • 考虑为弹道物体加入对象池（当前未实现）
+    </div>
+  </div>
+</div>
+
+<div class="callout good">
+  <div class="callout-title">验收标准 — 读完本章后你应该能回答</div>
+  1. AbilityExecution 和 Ability 的关系是什么？为什么要分开？<br>
+  2. ExecuteClipData 的 HasStarted/HasEnded 状态机是如何工作的？<br>
+  3. StartTrigger 和 CollisionTrigger 两种 FireType 分别对应什么游戏行为？<br>
+  4. 弹道物体（ItemExecute）的生命周期独立于 Execution 意味着什么？<br>
+  5. ActionEventData 如何将视觉时间轴上的一个时刻转化为实际的伤害操作？完整路径是什么？<br>
+  6. 如果要实现一个「向前方扔出飞镖，命中后弹射到附近目标」的技能，需要哪些 Clip 和什么 CollisionMoveType？
+</div>
+
+<!-- Chapter Navigation -->
+<div class="ch-nav">
+  <a href="ch06-trigger.html">
+    <span class="dir">← 上一章</span>
+    Ch06 触发系统
+  </a>
+  <a href="ch08-action.html">
+    <span class="dir">下一章 →</span>
+    Ch08 行动系统
+  </a>
+</div>
+
+</main>
+</div>
+</body>
+</html>

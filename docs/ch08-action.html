@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ch08 — Action 行动系统 | EGamePlay</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&family=Noto+Sans+SC:wght@400;600;700;900&family=JetBrains+Mono:wght@400;600&family=Playfair+Display:wght@900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="doc-layout">
+
+<!-- Sidebar -->
+<nav class="doc-sidebar">
+  <div class="nav-brand"><a href="index.html">EGamePlay</a></div>
+  <div class="nav-section">Chapters</div>
+  <ul class="nav-list">
+    <li><a href="ch01-ecsnode.html"><span class="ch-num">01</span> EcsNode 框架底座</a></li>
+    <li><a href="ch02-numeric.html"><span class="ch-num">02</span> 数值系统</a></li>
+    <li><a href="ch03-combat-entity.html"><span class="ch-num">03</span> 战斗实体</a></li>
+    <li><a href="ch04-ability.html"><span class="ch-num">04</span> 技能/Buff 核心</a></li>
+    <li><a href="ch05-effect.html"><span class="ch-num">05</span> 效果系统</a></li>
+    <li><a href="ch06-trigger.html"><span class="ch-num">06</span> 触发系统</a></li>
+    <li><a href="ch07-execution.html"><span class="ch-num">07</span> 执行时间轴</a></li>
+    <li><a class="active" href="ch08-action.html"><span class="ch-num">08</span> 行动系统</a></li>
+    <li><a href="ch09-config.html"><span class="ch-num">09</span> 配置管线</a></li>
+  </ul>
+  <div class="nav-section" style="margin-top:24px">本章目录</div>
+  <ul class="nav-list">
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#iaction-ability">IActionAbility 工厂接口</a></li>
+    <li><a href="#iaction-execute">IActionExecute 接口</a></li>
+    <li><a href="#action-entities">7 种 Action 实体</a></li>
+    <li><a href="#lifecycle">8 阶段生命周期</a></li>
+    <li><a href="#damage-system">DamageActionSystem</a></li>
+    <li><a href="#spell-system">SpellActionSystem</a></li>
+    <li><a href="#addbuff-system">AddBuffActionSystem</a></li>
+    <li><a href="#assign-system">AssignActionSystem</a></li>
+    <li><a href="#summary">设计总结</a></li>
+  </ul>
+</nav>
+
+<!-- Main Content -->
+<main class="doc-main">
+<div class="ch-header">
+  <div class="ch-kicker">Chapter 08</div>
+  <h1>Action — <span class="accent">行动系统</span></h1>
+  <p class="ch-subtitle">战斗中每一次「发生的事」都是一个 Action：释放技能、造成伤害、治疗、施加 Buff、普攻、碰撞、效果分配。Action 系统通过 8 阶段管线将每个行动拆解为可插入、可拦截、可修改的独立步骤，是整个战斗流程的脊柱。</p>
+</div>
+
+<!-- ===== 1. Overview ===== -->
+<h2 id="overview"><span class="num">8.1</span> 概述</h2>
+
+<div class="callout">
+  <div class="callout-title">核心定位</div>
+  Action 系统是 EGamePlay 的<strong>行动管线</strong>。它解决的核心问题：<br>
+  • 如何统一处理「释放技能」「造成伤害」「治疗」「加 Buff」等不同行为？<br>
+  • 如何在行动执行的各个阶段插入逻辑（如护甲减伤、暴击判定、伤害反弹）？<br>
+  • 如何让攻击方和受击方都能在各自的时机做出响应？<br><br>
+  答案：每个行为都是一个 <code>EcsEntity</code>，由工厂创建，经过 8 阶段管线处理后销毁。
+</div>
+
+<div class="section-label">文件位置</div>
+<pre class="code"><span class="file-tag">目录结构</span>
+Assets/App.Model/Game.Model/.../CombatEntity/Action/
+├── IActionAbility.cs        <span class="cm">// 工厂接口</span>
+├── IActionExecute.cs        <span class="cm">// 执行接口 + ActionType 枚举</span>
+├── SpellAction.cs           <span class="cm">// 施法行动</span>
+├── DamageAction.cs          <span class="cm">// 伤害行动</span>
+├── CureAction.cs            <span class="cm">// 治疗行动</span>
+├── AddBuffAction.cs         <span class="cm">// 施加 Buff 行动</span>
+├── AttackAction.cs          <span class="cm">// 普攻行动</span>
+├── CollisionAction.cs       <span class="cm">// 碰撞行动（弹道命中）</span>
+└── EffectAssignAction.cs    <span class="cm">// 效果分配行动</span>
+
+Assets/App.Hotfix/Game.Hotfix/.../CombatEntity/Action/
+├── ActionSystem.cs          <span class="cm">// 8阶段管线调度</span>
+├── DamageActionSystem.cs    <span class="cm">// 伤害计算逻辑</span>
+├── SpellActionSystem.cs     <span class="cm">// 施法执行逻辑</span>
+├── CureActionSystem.cs      <span class="cm">// 治疗执行逻辑</span>
+├── AddBuffActionSystem.cs   <span class="cm">// 加 Buff 执行逻辑</span>
+├── AttackActionSystem.cs    <span class="cm">// 普攻执行逻辑</span>
+├── CollisionActionSystem.cs <span class="cm">// 碰撞执行逻辑</span>
+└── AssignActionSystem.cs    <span class="cm">// 效果分配调度</span>
+</pre>
+
+<!-- ===== 2. IActionAbility ===== -->
+<h2 id="iaction-ability"><span class="num">8.2</span> IActionAbility — 工厂接口</h2>
+
+<p>CombatEntity 持有多个 <code>IActionAbility</code> 实现，用于创建对应类型的 Action。这是工厂模式 — 每种行动类型有自己的工厂。</p>
+
+<pre class="code"><span class="file-tag">IActionAbility.cs</span>
+<span class="kw">namespace</span> EGamePlay.Combat
+{
+    <span class="cm">/// Action 工厂接口</span>
+    <span class="cm">/// CombatEntity 通过此接口创建各种 Action 实体</span>
+    <span class="kw">public interface</span> <span class="tp">IActionAbility</span>
+    {
+        <span class="cm">/// 尝试创建一个 Action 实例</span>
+        <span class="cm">/// 返回 false 表示当前条件不满足（如 CD 中、被沉默等）</span>
+        <span class="kw">bool</span> <span class="fn">TryMakeAction</span>(<span class="kw">out</span> <span class="tp">IActionExecute</span> action);
+    }
+}
+</pre>
+
+<div class="callout">
+  <div class="callout-title">工厂模式的意义</div>
+  <code>TryMakeAction</code> 返回 bool 允许在创建阶段就进行条件检查：<br>
+  • SpellAction 工厂：检查 CD、蓝量、是否被沉默<br>
+  • AttackAction 工厂：检查是否被缴械<br>
+  • DamageAction 工厂：通常总是 true（伤害由系统内部触发）<br><br>
+  这样上层调用方只需要 <code>if (ability.TryMakeAction(out var action))</code>，不需要关心具体的前置条件。
+</div>
+
+<!-- ===== 3. IActionExecute ===== -->
+<h2 id="iaction-execute"><span class="num">8.3</span> IActionExecute — 执行接口</h2>
+
+<p>所有 Action 实体都实现 <code>IActionExecute</code> 接口，声明自己的类型和关联的实体。</p>
+
+<pre class="code"><span class="file-tag">IActionExecute.cs</span>
+<span class="kw">namespace</span> EGamePlay.Combat
+{
+    <span class="cm">/// 行动类型枚举 — 标识 7 种行动</span>
+    <span class="kw">public enum</span> <span class="tp">ActionType</span>
+    {
+        <span class="fn">SpellAction</span>,         <span class="cm">// 释放技能</span>
+        <span class="fn">DamageAction</span>,        <span class="cm">// 造成伤害</span>
+        <span class="fn">CureAction</span>,          <span class="cm">// 治疗恢复</span>
+        <span class="fn">AddBuffAction</span>,       <span class="cm">// 施加 Buff/Debuff</span>
+        <span class="fn">AttackAction</span>,        <span class="cm">// 普通攻击</span>
+        <span class="fn">CollisionAction</span>,     <span class="cm">// 碰撞命中（弹道/范围）</span>
+        <span class="fn">EffectAssignAction</span>,  <span class="cm">// 效果分配（触发器调度）</span>
+    }
+
+    <span class="cm">/// Action 执行接口</span>
+    <span class="kw">public interface</span> <span class="tp">IActionExecute</span>
+    {
+        <span class="cm">/// 行动类型</span>
+        <span class="tp">ActionType</span> <span class="fn">ActionType</span> { <span class="kw">get</span>; }
+
+        <span class="cm">/// 行动发起者（攻击方/施法者）</span>
+        <span class="tp">CombatEntity</span> <span class="fn">Creator</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+
+        <span class="cm">/// 行动目标（受击方/被治疗者）</span>
+        <span class="tp">CombatEntity</span> <span class="fn">Target</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+
+        <span class="cm">/// 来源的 EffectAssignAction（如果是由效果分配触发的）</span>
+        <span class="tp">EffectAssignAction</span> <span class="fn">SourceAssignAction</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+
+        <span class="cm">/// 创建此 Action 的工厂</span>
+        <span class="tp">IActionAbility</span> <span class="fn">ActionAbility</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+    }
+}
+</pre>
+
+<div class="callout good">
+  <div class="callout-title">设计洞察 — SourceAssignAction 溯源链</div>
+  <code>SourceAssignAction</code> 建立了完整的行动溯源链：<br>
+  <code>DamageAction.SourceAssignAction → EffectAssignAction → AbilityEffect → Ability</code><br><br>
+  这意味着当一个伤害发生时，你可以追溯到「哪个技能的哪个效果触发了这次伤害」。用于：<br>
+  • 伤害统计面板（技能 X 造成了多少伤害）<br>
+  • 条件触发（当某个特定技能造成暴击时…）<br>
+  • 调试日志（为什么这个伤害这么高？追溯源头）
+</div>
+
+<!-- ===== 4. Action Entities ===== -->
+<h2 id="action-entities"><span class="num">8.4</span> 7 种 Action 实体类</h2>
+
+<p>每种 Action 都是独立的 <code>EcsEntity</code> 子类，携带该行动需要的特有数据。生命周期极短：创建 → 走完 8 阶段管线 → 销毁。</p>
+
+<h3>SpellAction — 施法行动</h3>
+<pre class="code"><span class="file-tag">SpellAction.cs</span>
+<span class="kw">namespace</span> EGamePlay.Combat
+{
+    <span class="cm">/// 释放技能的行动</span>
+    <span class="cm">/// 由玩家输入或 AI 触发，包含技能的目标/方向/位置信息</span>
+    <span class="kw">public class</span> <span class="tp">SpellAction</span> : <span class="tp">EcsEntity</span>, <span class="tp">IActionExecute</span>
+    {
+        <span class="kw">public</span> <span class="tp">ActionType</span> <span class="fn">ActionType</span> => ActionType.SpellAction;
+
+        <span class="cm">// ═══════════ IActionExecute ═══════════</span>
+        <span class="kw">public</span> <span class="tp">CombatEntity</span> <span class="fn">Creator</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        <span class="kw">public</span> <span class="tp">CombatEntity</span> <span class="fn">Target</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        <span class="kw">public</span> <span class="tp">EffectAssignAction</span> <span class="fn">SourceAssignAction</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        <span class="kw">public</span> <span class="tp">IActionAbility</span> <span class="fn">ActionAbility</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+
+        <span class="cm">// ═══════════ SpellAction 特有数据 ═══════════</span>
+        <span class="kw">public</span> <span class="tp">CombatEntity</span> <span class="fn">InputTarget</span> { <span class="kw">get</span>; <span class="kw">set</span>; }      <span class="cm">// 指向目标（指向性技能）</span>
+        <span class="kw">public</span> <span class="tp">Vector3</span> <span class="fn">InputPoint</span> { <span class="kw">get</span>; <span class="kw">set</span>; }              <span class="cm">// 释放位置（地点 AOE）</span>
+        <span class="kw">public</span> <span class="tp">float</span> <span class="fn">InputDirection</span> { <span class="kw">get</span>; <span class="kw">set</span>; }             <span class="cm">// 释放方向（方向技能）</span>
+        <span class="kw">public</span> <span class="tp">AbilityExecution</span> <span class="fn">AbilityExecution</span> { <span class="kw">get</span>; <span class="kw">set</span>; } <span class="cm">// 创建的执行体</span>
+    }
+}
+</pre>
+
+<h3>DamageAction — 伤害行动</h3>
+<pre class="code"><span class="file-tag">DamageAction.cs</span>
+<span class="kw">namespace</span> EGamePlay.Combat
+{
+    <span class="cm">/// 伤害来源类型</span>
+    <span class="kw">public enum</span> <span class="tp">DamageSource</span>
+    {
+        <span class="fn">Attack</span>,  <span class="cm">// 普攻伤害</span>
+        <span class="fn">Skill</span>,   <span class="cm">// 技能伤害</span>
+        <span class="fn">Buff</span>,    <span class="cm">// Buff/DOT 伤害</span>
+    }
+
+    <span class="cm">/// 造成伤害的行动</span>
+    <span class="cm">/// 是整个战斗系统中最复杂的 Action，经过完整的伤害计算管线</span>
+    <span class="kw">public class</span> <span class="tp">DamageAction</span> : <span class="tp">EcsEntity</span>, <span class="tp">IActionExecute</span>
+    {
+        <span class="kw">public</span> <span class="tp">ActionType</span> <span class="fn">ActionType</span> => ActionType.DamageAction;
+
+        <span class="cm">// ═══════════ IActionExecute ═══════════</span>
+        <span class="kw">public</span> <span class="tp">CombatEntity</span> <span class="fn">Creator</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        <span class="kw">public</span> <span class="tp">CombatEntity</span> <span class="fn">Target</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        <span class="kw">public</span> <span class="tp">EffectAssignAction</span> <span class="fn">SourceAssignAction</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        <span class="kw">public</span> <span class="tp">IActionAbility</span> <span class="fn">ActionAbility</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+
+        <span class="cm">// ═══════════ DamageAction 特有数据 ═══════════</span>
+        <span class="kw">public int</span> <span class="fn">DamageValue</span> { <span class="kw">get</span>; <span class="kw">set</span>; }          <span class="cm">// 最终伤害数值</span>
+        <span class="kw">public bool</span> <span class="fn">IsCritical</span> { <span class="kw">get</span>; <span class="kw">set</span>; }          <span class="cm">// 是否暴击</span>
+        <span class="kw">public</span> <span class="tp">DamageSource</span> <span class="fn">DamageSource</span> { <span class="kw">get</span>; <span class="kw">set</span>; } <span class="cm">// 伤害来源类型</span>
+    }
+}
+</pre>
+
+<h3>CureAction — 治疗行动</h3>
+<pre class="code"><span class="file-tag">CureAction.cs</span>
+<span class="kw">namespace</span> EGamePlay.Combat
+{
+    <span class="cm">/// 治疗/恢复的行动</span>
+    <span class="kw">public class</span> <span class="tp">CureAction</span> : <span class="tp">EcsEntity</span>, <span class="tp">IActionExecute</span>
+    {
+        <span class="kw">public</span> <span class="tp">ActionType</span> <span class="fn">ActionType</span> => ActionType.CureAction;
+
+        <span class="cm">// ═══════════ IActionExecute ═══════════</span>
+        <span class="kw">public</span> <span class="tp">CombatEntity</span> <span class="fn">Creator</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        <span class="kw">public</span> <span class="tp">CombatEntity</span> <span class="fn">Target</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        <span class="kw">public</span> <span class="tp">EffectAssignAction</span> <span class="fn">SourceAssignAction</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        <span class="kw">public</span> <span class="tp">IActionAbility</span> <span class="fn">ActionAbility</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+
+        <span class="cm">// ═══════════ CureAction 特有数据 ═══════════</span>
+        <span class="kw">public int</span> <span class="fn">CureValue</span> { <span class="kw">get</span>; <span class="kw">set</span>; }  <span class="cm">// 治疗数值</span>
+    }
+}
+</pre>
+
+<h3>AddBuffAction — 施加 Buff 行动</h3>
+<pre class="code"><span class="file-tag">AddBuffAction.cs</span>
+<span class="kw">namespace</span> EGamePlay.Combat
+{
+    <span class="cm">/// 施加 Buff/Debuff 的行动</span>
+    <span class="kw">public class</span> <span class="tp">AddBuffAction</span> : <span class="tp">EcsEntity</span>, <span class="tp">IActionExecute</span>
+    {
+        <span class="kw">public</span> <span class="tp">ActionType</span> <span class="fn">ActionType</span> => ActionType.AddBuffAction;
+
+        <span class="cm">// ═══════════ IActionExecute ═══════════</span>
+        <span class="kw">public</span> <span class="tp">CombatEntity</span> <span class="fn">Creator</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        <span class="kw">public</span> <span class="tp">CombatEntity</span> <span class="fn">Target</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        <span class="kw">public</span> <span class="tp">EffectAssignAction</span> <span class="fn">SourceAssignAction</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        <span class="kw">public</span> <span class="tp">IActionAbility</span> <span class="fn">ActionAbility</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+
+        <span class="cm">// ═══════════ AddBuffAction 特有数据 ═══════════</span>
+        <span class="kw">public</span> <span class="tp">AddStatusEffect</span> <span class="fn">AddStatusEffect</span> { <span class="kw">get</span>; <span class="kw">set</span>; }  <span class="cm">// Buff 配置</span>
+        <span class="kw">public</span> <span class="tp">Ability</span> <span class="fn">SourceAbility</span> { <span class="kw">get</span>; <span class="kw">set</span>; }               <span class="cm">// 来源技能</span>
+    }
+}
+</pre>
+
+<h3>AttackAction — 普攻行动</h3>
+<pre class="code"><span class="file-tag">AttackAction.cs</span>
+<span class="kw">namespace</span> EGamePlay.Combat
+{
+    <span class="cm">/// 普通攻击行动</span>
+    <span class="cm">/// 比 SpellAction 更轻量，不需要执行时间轴</span>
+    <span class="kw">public class</span> <span class="tp">AttackAction</span> : <span class="tp">EcsEntity</span>, <span class="tp">IActionExecute</span>
+    {
+        <span class="kw">public</span> <span class="tp">ActionType</span> <span class="fn">ActionType</span> => ActionType.AttackAction;
+
+        <span class="cm">// ═══════════ IActionExecute ═══════════</span>
+        <span class="kw">public</span> <span class="tp">CombatEntity</span> <span class="fn">Creator</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        <span class="kw">public</span> <span class="tp">CombatEntity</span> <span class="fn">Target</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        <span class="kw">public</span> <span class="tp">EffectAssignAction</span> <span class="fn">SourceAssignAction</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        <span class="kw">public</span> <span class="tp">IActionAbility</span> <span class="fn">ActionAbility</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+    }
+}
+</pre>
+
+<h3>CollisionAction — 碰撞行动</h3>
+<pre class="code"><span class="file-tag">CollisionAction.cs</span>
+<span class="kw">namespace</span> EGamePlay.Combat
+{
+    <span class="cm">/// 碰撞命中行动</span>
+    <span class="cm">/// 当 AbilityItem（弹道/AOE区域）碰撞到目标时触发</span>
+    <span class="kw">public class</span> <span class="tp">CollisionAction</span> : <span class="tp">EcsEntity</span>, <span class="tp">IActionExecute</span>
+    {
+        <span class="kw">public</span> <span class="tp">ActionType</span> <span class="fn">ActionType</span> => ActionType.CollisionAction;
+
+        <span class="cm">// ═══════════ IActionExecute ═══════════</span>
+        <span class="kw">public</span> <span class="tp">CombatEntity</span> <span class="fn">Creator</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        <span class="kw">public</span> <span class="tp">CombatEntity</span> <span class="fn">Target</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        <span class="kw">public</span> <span class="tp">EffectAssignAction</span> <span class="fn">SourceAssignAction</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        <span class="kw">public</span> <span class="tp">IActionAbility</span> <span class="fn">ActionAbility</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+
+        <span class="cm">// ═══════════ CollisionAction 特有数据 ═══════════</span>
+        <span class="kw">public</span> <span class="tp">AbilityItem</span> <span class="fn">AbilityItem</span> { <span class="kw">get</span>; <span class="kw">set</span>; }  <span class="cm">// 触发碰撞的弹道/区域实体</span>
+    }
+}
+</pre>
+
+<h3>EffectAssignAction — 效果分配行动</h3>
+<pre class="code"><span class="file-tag">EffectAssignAction.cs</span>
+<span class="kw">namespace</span> EGamePlay.Combat
+{
+    <span class="cm">/// 效果分配行动 — 触发器系统的桥梁</span>
+    <span class="cm">/// 当触发器决定「现在应该执行某个效果」时，创建此 Action</span>
+    <span class="cm">/// AssignActionSystem 再根据效果类型派发到具体的 Action</span>
+    <span class="kw">public class</span> <span class="tp">EffectAssignAction</span> : <span class="tp">EcsEntity</span>, <span class="tp">IActionExecute</span>
+    {
+        <span class="kw">public</span> <span class="tp">ActionType</span> <span class="fn">ActionType</span> => ActionType.EffectAssignAction;
+
+        <span class="cm">// ═══════════ IActionExecute ═══════════</span>
+        <span class="kw">public</span> <span class="tp">CombatEntity</span> <span class="fn">Creator</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        <span class="kw">public</span> <span class="tp">CombatEntity</span> <span class="fn">Target</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        <span class="kw">public</span> <span class="tp">EffectAssignAction</span> <span class="fn">SourceAssignAction</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        <span class="kw">public</span> <span class="tp">IActionAbility</span> <span class="fn">ActionAbility</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+
+        <span class="cm">// ═══════════ EffectAssignAction 特有数据 ═══════════</span>
+        <span class="kw">public</span> <span class="tp">AbilityEffect</span> <span class="fn">AbilityEffect</span> { <span class="kw">get</span>; <span class="kw">set</span>; }      <span class="cm">// 要执行的效果实体</span>
+        <span class="kw">public</span> <span class="tp">CombatEntity</span> <span class="fn">AssignTarget</span> { <span class="kw">get</span>; <span class="kw">set</span>; }        <span class="cm">// 效果分配目标</span>
+        <span class="kw">public</span> <span class="tp">Ability</span> <span class="fn">SourceAbility</span> { <span class="kw">get</span>; <span class="kw">set</span>; }             <span class="cm">// 来源技能</span>
+        <span class="kw">public</span> <span class="tp">TriggerContext</span> <span class="fn">TriggerContext</span> { <span class="kw">get</span>; <span class="kw">set</span>; }     <span class="cm">// 触发上下文</span>
+    }
+}
+</pre>
+
+<div class="callout warn">
+  <div class="callout-title">EffectAssignAction 是调度枢纽</div>
+  <code>EffectAssignAction</code> 是触发器系统（Ch06）和行动系统的桥梁：<br>
+  • 触发器检测到条件满足 → 创建 EffectAssignAction<br>
+  • AssignActionSystem 读取 AbilityEffect 的类型（伤害/治疗/加Buff/...）<br>
+  • 派发到对应的具体 System（DamageActionSystem / CureActionSystem / ...）<br><br>
+  这实现了「效果类型」和「执行逻辑」的解耦 — 添加新效果类型只需新增一个分支。
+</div>
+
+<!-- ===== 5. Lifecycle ===== -->
+<h2 id="lifecycle"><span class="num">8.5</span> ActionSystem — 8 阶段生命周期</h2>
+
+<p>所有 Action 执行时都经过统一的 8 阶段管线。每个阶段是一个扩展点，可以通过挂载对应的 ActionPoint 来插入逻辑（如护盾吸收、伤害反弹、暴击加成）。</p>
+
+<h3>阶段总览</h3>
+<div class="flow flow-v">
+  <div class="flow-row">
+    <div class="flow-node blue">Phase 1: BeforeExecuteAction</div>
+    <span class="flow-label">攻击方 — 行动前置检查/修改</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node cyan">Phase 2: BeforeSufferAction</div>
+    <span class="flow-label">受击方 — 受击前置检查/修改</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node purple">Phase 3: ActionCheckProcess</div>
+    <span class="flow-label">验证 + 核心计算（伤害值/治疗值）</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node blue">Phase 4: BeforeCauseApply</div>
+    <span class="flow-label">攻击方 — 应用前修改（最后的加成）</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node cyan">Phase 5: BeforeReceiveApply</div>
+    <span class="flow-label">受击方 — 应用前修改（护盾/减伤）</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node green">Phase 6: ActionApply</div>
+    <span class="flow-label">执行！扣血/加血/施加Buff</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node warn">Phase 7: AfterCauseApply + AfterReceiveApply</div>
+    <span class="flow-label">双方事后处理（吸血/反伤/触发被动）</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node red">Phase 8: AfterExecuteAction + AfterSufferAction</div>
+    <span class="flow-label">双方最终清理 + 统计</span>
+  </div>
+</div>
+
+<h3>完整管线源码</h3>
+<pre class="code"><span class="file-tag">ActionSystem.cs — Execute 方法</span>
+<span class="kw">public static class</span> <span class="tp">ActionSystem</span>
+{
+    <span class="cm">/// 执行一个 Action 的完整 8 阶段管线</span>
+    <span class="kw">public static void</span> <span class="fn">Execute</span>(<span class="tp">IActionExecute</span> action)
+    {
+        <span class="kw">var</span> creator = action.Creator;
+        <span class="kw">var</span> target = action.Target;
+
+        <span class="cm">// ═══════════ Phase 1: BeforeExecuteAction ═══════════</span>
+        <span class="cm">// 攻击方的前置处理点</span>
+        <span class="cm">// 用途：攻击方的 Buff 可以在此修改行动（如「下次伤害翻倍」）</span>
+        <span class="hl">creator.TriggerActionPoint(ActionPointType.BeforeExecuteAction, action);</span>
+
+        <span class="cm">// ═══════════ Phase 2: BeforeSufferAction ═══════════</span>
+        <span class="cm">// 受击方的前置处理点</span>
+        <span class="cm">// 用途：受击方的 Buff 可以在此拦截（如「无敌状态免疫伤害」）</span>
+        <span class="hl">target.TriggerActionPoint(ActionPointType.BeforeSufferAction, action);</span>
+
+        <span class="cm">// ═══════════ Phase 3: ActionCheckProcess ═══════════</span>
+        <span class="cm">// 核心计算阶段</span>
+        <span class="cm">// 由各个具体的 ActionSystem 实现（如 DamageActionSystem 计算伤害）</span>
+        <span class="hl">ActionCheckProcess(action);</span>
+
+        <span class="cm">// ═══════════ Phase 4: BeforeCauseApply ═══════════</span>
+        <span class="cm">// 攻击方的应用前处理</span>
+        <span class="cm">// 用途：「造成伤害前，额外附加 X% 真实伤害」</span>
+        <span class="hl">creator.TriggerActionPoint(ActionPointType.BeforeCauseApply, action);</span>
+
+        <span class="cm">// ═══════════ Phase 5: BeforeReceiveApply ═══════════</span>
+        <span class="cm">// 受击方的应用前处理</span>
+        <span class="cm">// 用途：护盾吸收、伤害减免百分比</span>
+        <span class="hl">target.TriggerActionPoint(ActionPointType.BeforeReceiveApply, action);</span>
+
+        <span class="cm">// ═══════════ Phase 6: ActionApply ═══════════</span>
+        <span class="cm">// 真正的执行 — 修改数值/状态</span>
+        <span class="cm">// 伤害：target.HP -= damage</span>
+        <span class="cm">// 治疗：target.HP += cure</span>
+        <span class="cm">// 加 Buff：target.AddAbility(buff)</span>
+        <span class="hl">ActionApply(action);</span>
+
+        <span class="cm">// ═══════════ Phase 7: AfterCauseApply + AfterReceiveApply ═══════════</span>
+        <span class="cm">// 双方的事后处理</span>
+        <span class="cm">// 攻击方用途：生命偷取（造成伤害后回血）</span>
+        <span class="cm">// 受击方用途：荆棘护甲（受到伤害后反弹）</span>
+        <span class="hl">creator.TriggerActionPoint(ActionPointType.AfterCauseApply, action);</span>
+        <span class="hl">target.TriggerActionPoint(ActionPointType.AfterReceiveApply, action);</span>
+
+        <span class="cm">// ═══════════ Phase 8: AfterExecuteAction + AfterSufferAction ═══════════</span>
+        <span class="cm">// 最终阶段 — 通常用于统计和 UI 更新</span>
+        <span class="cm">// 攻击方：记录「本次造成了 X 伤害」</span>
+        <span class="cm">// 受击方：触发飘字、受击动画、死亡检测</span>
+        <span class="hl">creator.TriggerActionPoint(ActionPointType.AfterExecuteAction, action);</span>
+        <span class="hl">target.TriggerActionPoint(ActionPointType.AfterSufferAction, action);</span>
+    }
+}
+</pre>
+
+<h3>各阶段的 MOBA 应用场景</h3>
+<table class="data">
+  <thead><tr><th>阶段</th><th>角色</th><th>MOBA 实例</th></tr></thead>
+  <tbody>
+    <tr><td>Phase 1 BeforeExecuteAction</td><td>攻击方</td><td>露娜被动：技能后下一次普攻强化</td></tr>
+    <tr><td>Phase 2 BeforeSufferAction</td><td>受击方</td><td>张飞大招：免疫控制效果</td></tr>
+    <tr><td>Phase 3 ActionCheckProcess</td><td>系统</td><td>计算 ATK×(ATK/(ATK+DEF)) 基础伤害</td></tr>
+    <tr><td>Phase 4 BeforeCauseApply</td><td>攻击方</td><td>末世：额外造成目标当前HP 8% 伤害</td></tr>
+    <tr><td>Phase 5 BeforeReceiveApply</td><td>受击方</td><td>不祥征兆：减少 35% 物理伤害</td></tr>
+    <tr><td>Phase 6 ActionApply</td><td>系统</td><td>实际扣血 target.HP -= finalDamage</td></tr>
+    <tr><td>Phase 7 AfterCause/ReceiveApply</td><td>双方</td><td>吸血书(攻方回血) / 反甲(受方反伤)</td></tr>
+    <tr><td>Phase 8 AfterExecute/SufferAction</td><td>双方</td><td>更新 UI 飘字、击杀判定、助攻记录</td></tr>
+  </tbody>
+</table>
+
+<div class="callout good">
+  <div class="callout-title">设计洞察 — 为什么是 8 阶段而不是更简单的 Before/After</div>
+  关键在于<strong>攻守双方各有独立的插入点</strong>：<br>
+  • Phase 1 vs Phase 2：攻击方增伤 和 受击方减免 是独立的<br>
+  • Phase 4 vs Phase 5：应用前的最终修改也是双方独立的<br>
+  • Phase 7：事后处理也是双方独立的（吸血 vs 反伤）<br><br>
+  如果只有 Before/After，你无法区分「谁的 Buff 在什么时候生效」。8 阶段让优先级完全明确。
+</div>
+
+<!-- ===== 6. DamageActionSystem ===== -->
+<h2 id="damage-system"><span class="num">8.6</span> DamageActionSystem.Execute — 伤害计算</h2>
+
+<p>伤害计算是 ActionCheckProcess 阶段的具体实现。它根据伤害来源（普攻/技能/Buff）走不同的计算路径。</p>
+
+<pre class="code"><span class="file-tag">DamageActionSystem.cs — 完整执行逻辑</span>
+<span class="kw">public class</span> <span class="tp">DamageActionSystem</span> : <span class="tp">AEntitySystem</span>&lt;<span class="tp">DamageAction</span>&gt;, <span class="tp">IAwake</span>&lt;<span class="tp">DamageAction</span>&gt;
+{
+    <span class="kw">public void</span> <span class="fn">Awake</span>(<span class="tp">DamageAction</span> action)
+    {
+        <span class="cm">// DamageAction 创建后立即执行管线</span>
+        Execute(action);
+    }
+
+    <span class="kw">private void</span> <span class="fn">Execute</span>(<span class="tp">DamageAction</span> action)
+    {
+        <span class="kw">var</span> creator = action.Creator;
+        <span class="kw">var</span> target = action.Target;
+
+        <span class="cm">// ═══════════ 获取攻防属性 ═══════════</span>
+        <span class="kw">var</span> atk = creator.GetComponent&lt;<span class="tp">AttributeComponent</span>&gt;().Attack.<span class="fn">Value</span>;
+        <span class="kw">var</span> def = target.GetComponent&lt;<span class="tp">AttributeComponent</span>&gt;().Defense.<span class="fn">Value</span>;
+
+        <span class="cm">// ═══════════ 基础伤害计算 ═══════════</span>
+        <span class="kw">int</span> damage = <span class="nm">0</span>;
+
+        <span class="kw">if</span> (action.DamageSource == DamageSource.Attack)
+        {
+            <span class="cm">// 普攻伤害路径：纯靠攻防公式</span>
+            <span class="hl">damage = (<span class="kw">int</span>)(atk * (atk / (atk + def)));</span>
+        }
+        <span class="kw">else if</span> (action.DamageSource == DamageSource.Skill)
+        {
+            <span class="cm">// 技能伤害路径：读取效果配置的伤害公式</span>
+            <span class="kw">var</span> abilityEffect = action.SourceAssignAction.AbilityEffect;
+            <span class="hl">damage = EffectDamageSystem.<span class="fn">GetDamageValue</span>(abilityEffect);</span>
+            <span class="cm">// ↑ 解析 DamageValueFormula 表达式，替换运行时参数</span>
+        }
+        <span class="kw">else if</span> (action.DamageSource == DamageSource.Buff)
+        {
+            <span class="cm">// Buff/DOT 伤害路径：同技能</span>
+            <span class="kw">var</span> abilityEffect = action.SourceAssignAction.AbilityEffect;
+            damage = EffectDamageSystem.GetDamageValue(abilityEffect);
+        }
+
+        <span class="cm">// ═══════════ 暴击判定 ═══════════</span>
+        <span class="kw">var</span> critProb = creator.GetComponent&lt;<span class="tp">AttributeComponent</span>&gt;()
+            .CriticalProbability.<span class="fn">Value</span>;
+        <span class="kw">if</span> (<span class="tp">Random</span>.Range(<span class="nm">0f</span>, <span class="nm">1f</span>) &lt; critProb / <span class="nm">100f</span>)
+        {
+            <span class="hl">damage = (<span class="kw">int</span>)(damage * <span class="nm">1.5f</span>);</span>
+            <span class="hl">action.IsCritical = <span class="kw">true</span>;</span>
+        }
+
+        <span class="cm">// ═══════════ 记录最终伤害值 ═══════════</span>
+        action.DamageValue = damage;
+
+        <span class="cm">// ═══════════ 走 8 阶段管线 ═══════════</span>
+        ActionSystem.Execute(action);
+
+        <span class="cm">// ═══════════ Phase 6 ActionApply: 扣血 ═══════════</span>
+        <span class="cm">// （在 ActionApply 阶段执行）</span>
+        <span class="kw">var</span> hp = target.GetComponent&lt;<span class="tp">AttributeComponent</span>&gt;().HealthPoint;
+        <span class="kw">var</span> newHp = hp.<span class="fn">Value</span> - action.DamageValue;
+        <span class="hl">hp.<span class="fn">SetBase</span>(newHp);</span>
+        <span class="cm">// ↑ 直接修改 baseValue，因为 HP 的当前值就是 base</span>
+        <span class="cm">// （HP 的 Modifier 层用于最大生命值加成，当前值用 base 表示）</span>
+    }
+}
+</pre>
+
+<div class="callout">
+  <div class="callout-title">伤害公式解析</div>
+  <strong>核心公式：</strong><code>damage = atk × (atk / (atk + def))</code><br><br>
+  这是一个<strong>递减收益</strong>防御公式：<br>
+  • atk=100, def=0 → damage = 100×(100/100) = <strong>100</strong>（无防御 = 全额伤害）<br>
+  • atk=100, def=100 → damage = 100×(100/200) = <strong>50</strong>（等防 = 半伤）<br>
+  • atk=100, def=300 → damage = 100×(100/400) = <strong>25</strong>（3倍防 = 25%伤害）<br>
+  • atk=100, def=∞ → damage → <strong>0</strong>（但永远不为 0）<br><br>
+  特性：防御越堆越不值（递减收益），攻击永远能打出伤害（不会被 100% 减免）。
+</div>
+
+<div class="callout warn">
+  <div class="callout-title">暴击 1.5 倍 — 写死还是配置化？</div>
+  当前暴击倍率 <code>1.5f</code> 是硬编码的。在正式项目中应该：<br>
+  • 抽成 <code>AttributeComponent.CriticalDamageMultiplier</code>（也是 FloatNumeric）<br>
+  • 这样「暴击伤害提升」的装备/Buff 可以通过 Modifier 系统修改它<br>
+  • 当前实现是 Demo 简化，后续扩展不需要改架构
+</div>
+
+<!-- ===== 7. SpellActionSystem ===== -->
+<h2 id="spell-system"><span class="num">8.7</span> SpellActionSystem.Execute — 施法执行</h2>
+
+<p>SpellAction 的核心职责：创建 AbilityExecution（执行体），注入输入参数，启动时间轴。</p>
+
+<pre class="code"><span class="file-tag">SpellActionSystem.cs — 完整执行逻辑</span>
+<span class="kw">public class</span> <span class="tp">SpellActionSystem</span> : <span class="tp">AEntitySystem</span>&lt;<span class="tp">SpellAction</span>&gt;, <span class="tp">IAwake</span>&lt;<span class="tp">SpellAction</span>&gt;
+{
+    <span class="kw">public void</span> <span class="fn">Awake</span>(<span class="tp">SpellAction</span> action)
+    {
+        Execute(action);
+    }
+
+    <span class="kw">private void</span> <span class="fn">Execute</span>(<span class="tp">SpellAction</span> action)
+    {
+        <span class="kw">var</span> creator = action.Creator;
+        <span class="kw">var</span> ability = action.ActionAbility <span class="kw">as</span> <span class="tp">Ability</span>;
+
+        <span class="cm">// ═══════════ 1. 创建执行体 ═══════════</span>
+        <span class="cm">// AbilityExecution 是技能的「运行时实例」</span>
+        <span class="cm">// 一个 Ability 可以同时有多个 Execution（如持续施法/蓄力）</span>
+        <span class="kw">var</span> execution = creator.<span class="fn">AddChild</span>&lt;<span class="tp">AbilityExecution</span>&gt;(x =>
+        {
+            x.Ability = ability;
+            x.ExecutionObject = ability.ConfigObject.ExecutionObject;
+        });
+
+        <span class="cm">// ═══════════ 2. 注入输入参数 ═══════════</span>
+        <span class="cm">// 这些值来自玩家的输入（点击目标/点击地面/滑动方向）</span>
+        <span class="hl">execution.InputTarget = action.InputTarget;</span>
+        <span class="hl">execution.InputPoint = action.InputPoint;</span>
+        <span class="hl">execution.InputDirection = action.InputDirection;</span>
+
+        <span class="cm">// ═══════════ 3. 保存引用 ═══════════</span>
+        action.AbilityExecution = execution;
+
+        <span class="cm">// ═══════════ 4. 启动执行时间轴 ═══════════</span>
+        <span class="cm">// 触发 AbilityExecutionSystem.Awake → 加载 ExecutionObject</span>
+        <span class="cm">// → 解析 Timeline Clips → 开始逐帧播放</span>
+        <span class="hl">execution.<span class="fn">Init</span>();</span>
+        <span class="cm">// ↑ Init 触发 IInit System，开始运行时间轴</span>
+        <span class="cm">// 时间轴中的 Clip 会在对应时间点触发 EffectAssignAction</span>
+        <span class="cm">// → 再触发 DamageAction / AddBuffAction 等</span>
+    }
+}
+</pre>
+
+<div class="callout good">
+  <div class="callout-title">SpellAction 是「起点」</div>
+  SpellAction 不直接造成伤害或效果 — 它只负责创建和启动 AbilityExecution。<br>
+  后续的伤害/Buff 由时间轴中的 Clip 在正确的时间点触发。<br><br>
+  完整链路：<br>
+  <code>SpellAction → AbilityExecution.Init() → Timeline 播放 → Clip 触发 → EffectAssignAction → DamageAction/AddBuffAction</code>
+</div>
+
+<!-- ===== 8. AddBuffActionSystem ===== -->
+<h2 id="addbuff-system"><span class="num">8.8</span> AddBuffActionSystem.Execute — 加 Buff</h2>
+
+<p>AddBuffAction 负责将一个 Buff（本质上是 Ability 实体）挂载到目标身上。</p>
+
+<pre class="code"><span class="file-tag">AddBuffActionSystem.cs — 完整执行逻辑</span>
+<span class="kw">public class</span> <span class="tp">AddBuffActionSystem</span> : <span class="tp">AEntitySystem</span>&lt;<span class="tp">AddBuffAction</span>&gt;, <span class="tp">IAwake</span>&lt;<span class="tp">AddBuffAction</span>&gt;
+{
+    <span class="kw">public void</span> <span class="fn">Awake</span>(<span class="tp">AddBuffAction</span> action)
+    {
+        Execute(action);
+    }
+
+    <span class="kw">private void</span> <span class="fn">Execute</span>(<span class="tp">AddBuffAction</span> action)
+    {
+        <span class="kw">var</span> target = action.Target;
+        <span class="kw">var</span> addStatusEffect = action.AddStatusEffect;
+
+        <span class="cm">// ═══════════ 1. 获取 Buff 配置 ═══════════</span>
+        <span class="cm">// AddStatusEffect 持有要施加的 Buff 的 ScriptableObject 引用</span>
+        <span class="kw">var</span> buffConfigObject = addStatusEffect.StatusConfigObject;
+
+        <span class="cm">// ═══════════ 2. 挂载 Buff 到目标 ═══════════</span>
+        <span class="cm">// AbilitySystem.Attach 创建 Ability 子实体</span>
+        <span class="cm">// Buff 在 EGamePlay 中就是 Type="Buff" 的 Ability</span>
+        <span class="hl"><span class="kw">var</span> buff = AbilitySystem.<span class="fn">Attach</span>(target, buffConfigObject);</span>
+
+        <span class="cm">// ═══════════ 3. 设置持续时间 ═══════════</span>
+        <span class="cm">// 从 AddStatusEffect 配置读取持续时间</span>
+        <span class="kw">var</span> durationComponent = buff.GetComponent&lt;<span class="tp">AbilityDurationComponent</span>&gt;();
+        <span class="kw">if</span> (durationComponent != <span class="kw">null</span> && addStatusEffect.Duration > <span class="nm">0</span>)
+        {
+            <span class="hl">durationComponent.Duration = addStatusEffect.Duration;</span>
+            durationComponent.GameTimer.<span class="fn">Reset</span>();
+        }
+
+        <span class="cm">// ═══════════ 4. 参数替换 ═══════════</span>
+        <span class="cm">// Buff 的效果参数可能引用施法者的属性</span>
+        <span class="cm">// 如「造成施法者攻击力 * 50% 的持续伤害」</span>
+        <span class="cm">// 需要在挂载时将施法者属性快照到 Buff 参数中</span>
+        <span class="kw">if</span> (action.SourceAbility != <span class="kw">null</span>)
+        {
+            <span class="kw">var</span> sourceParams = action.SourceAbility.ConfigObject.Parameters;
+            <span class="kw">if</span> (sourceParams != <span class="kw">null</span>)
+            {
+                <span class="kw">foreach</span> (<span class="kw">var</span> param <span class="kw">in</span> sourceParams)
+                {
+                    <span class="cm">// 将源技能的参数传递到 Buff 的效果中</span>
+                    <span class="cm">// 如源技能的攻击力倍率 → Buff 的 DOT 伤害公式参数</span>
+                    buff.SetParameter(param.Key, param.Value);
+                }
+            }
+        }
+
+        <span class="cm">// ═══════════ 5. 激活 Buff ═══════════</span>
+        <span class="hl">buff.Enable = <span class="kw">true</span>;</span>
+        <span class="cm">// ↑ 触发 IEnable → 所有 Effect 的 Component System 启动</span>
+        <span class="cm">// → 属性修改器开始生效 / 触发器开始监听</span>
+    }
+}
+</pre>
+
+<div class="callout">
+  <div class="callout-title">Buff = Ability 的统一模型</div>
+  在 EGamePlay 中 Buff 不是独立系统 — 它就是一个 <code>Type="Buff"</code> 的 Ability：<br>
+  • 同样有 Effect 子实体（属性修改/DOT伤害/控制效果）<br>
+  • 同样通过 <code>AbilitySystem.Attach</code> 挂载<br>
+  • 同样用 Enable/Disable 控制激活状态<br>
+  • 结束时销毁 → 所有 Modifier 自动 Remove → 数值恢复<br><br>
+  <strong>这是整个框架最优雅的设计之一 — Skill 和 Buff 共享完整的技能管线。</strong>
+</div>
+
+<!-- ===== 9. AssignActionSystem ===== -->
+<h2 id="assign-system"><span class="num">8.9</span> AssignActionSystem.Execute — 效果分配调度</h2>
+
+<p>AssignActionSystem 是触发器系统和行动系统的桥梁。它根据 AbilityEffect 的类型，派发到对应的具体 Action。</p>
+
+<pre class="code"><span class="file-tag">AssignActionSystem.cs — 调度逻辑</span>
+<span class="kw">public class</span> <span class="tp">AssignActionSystem</span> : <span class="tp">AEntitySystem</span>&lt;<span class="tp">EffectAssignAction</span>&gt;, <span class="tp">IAwake</span>&lt;<span class="tp">EffectAssignAction</span>&gt;
+{
+    <span class="kw">public void</span> <span class="fn">Awake</span>(<span class="tp">EffectAssignAction</span> action)
+    {
+        Execute(action);
+    }
+
+    <span class="kw">private void</span> <span class="fn">Execute</span>(<span class="tp">EffectAssignAction</span> action)
+    {
+        <span class="kw">var</span> abilityEffect = action.AbilityEffect;
+        <span class="kw">var</span> target = action.AssignTarget;
+
+        <span class="cm">// ═══════════ 根据效果类型派发 ═══════════</span>
+        <span class="cm">// 调用 AbilityEffectSystem.TriggerApply</span>
+        <span class="cm">// 这个方法检查效果实体上挂了什么 Component，然后触发对应逻辑</span>
+        <span class="hl">AbilityEffectSystem.<span class="fn">TriggerApply</span>(abilityEffect, target, action);</span>
+
+        <span class="cm">// TriggerApply 内部的分发逻辑：</span>
+        <span class="cm">//</span>
+        <span class="cm">// if (effect.HasComponent&lt;EffectDamageComponent&gt;())</span>
+        <span class="cm">//     → 创建 DamageAction，设置 DamageSource = Skill/Buff</span>
+        <span class="cm">//</span>
+        <span class="cm">// if (effect.HasComponent&lt;EffectCureComponent&gt;())</span>
+        <span class="cm">//     → 创建 CureAction</span>
+        <span class="cm">//</span>
+        <span class="cm">// if (effect.HasComponent&lt;EffectAddBuffComponent&gt;())</span>
+        <span class="cm">//     → 创建 AddBuffAction</span>
+        <span class="cm">//</span>
+        <span class="cm">// if (effect.HasComponent&lt;EffectAttributeModifyComponent&gt;())</span>
+        <span class="cm">//     → 直接操作 Modifier（不需要独立 Action）</span>
+        <span class="cm">//</span>
+        <span class="cm">// if (effect.HasComponent&lt;EffectActionControlComponent&gt;())</span>
+        <span class="cm">//     → 施加行动控制（眩晕/沉默/缴械）</span>
+    }
+}
+</pre>
+
+<div class="callout good">
+  <div class="callout-title">数据流全景</div>
+  从触发到执行的完整数据流：<br><br>
+  <code>Trigger 检测条件满足</code><br>
+  → <code>创建 EffectAssignAction（携带 AbilityEffect + Target）</code><br>
+  → <code>AssignActionSystem.Execute</code><br>
+  → <code>AbilityEffectSystem.TriggerApply（检查 Component 类型）</code><br>
+  → <code>创建具体 Action（DamageAction / CureAction / AddBuffAction）</code><br>
+  → <code>具体 ActionSystem.Execute（走 8 阶段管线）</code><br>
+  → <code>数值变更 / 状态改变</code>
+</div>
+
+<!-- ===== Summary ===== -->
+<h2 id="summary"><span class="num">8.10</span> 设计总结</h2>
+
+<div class="card-grid">
+  <div class="card">
+    <div class="card-title">Action = 短命 Entity</div>
+    <div class="card-body">每个 Action 是 EcsEntity 实例，携带该行为的全部上下文。创建 → 管线 → 销毁。生命周期通常在一帧内完成。这意味着每次伤害都有独立的 DamageValue、IsCritical 等数据，不会互相污染。</div>
+  </div>
+  <div class="card green">
+    <div class="card-title">8 阶段 = 完美扩展点</div>
+    <div class="card-body">新需求（如「伤害反弹」「吸血」「护盾」）不需要修改 ActionSystem 核心代码 — 只需要在对应的 ActionPoint 注册回调。开闭原则的教科书实现。</div>
+  </div>
+  <div class="card warn">
+    <div class="card-title">EffectAssignAction 是枢纽</div>
+    <div class="card-body">触发器系统（Ch06）通过 EffectAssignAction 连接到行动系统。它是「什么时候执行」和「执行什么」之间的解耦点。去掉它，触发器就要直接知道行动系统的内部细节。</div>
+  </div>
+  <div class="card bad">
+    <div class="card-title">已知局限</div>
+    <div class="card-body">• 每次行动 new 一个 Entity，GC 压力（无对象池）<br>• 暴击倍率硬编码 1.5f<br>• 管线无法中途打断（如闪避应该跳过 Phase 6，当前需要在 Phase 5 将 damage 设为 0）<br>• 无异步支持（弹道飞行时间怎么办？答案在 Ch07 Execution）</div>
+  </div>
+</div>
+
+<div class="callout good">
+  <div class="callout-title">验收标准 — 读完本章后你应该能回答</div>
+  1. IActionAbility.TryMakeAction 的 bool 返回值解决了什么问题？<br>
+  2. 8 阶段管线中，「护盾吸收伤害」的逻辑应该放在哪个 Phase？为什么？<br>
+  3. DamageAction 的 DamageSource 字段如何影响伤害计算路径？<br>
+  4. EffectAssignAction 为什么是必要的中间层？如果去掉它会怎样？<br>
+  5. SpellAction 本身不造成伤害，那伤害是如何从技能释放最终传导到扣血的？完整链路是什么？
+</div>
+
+<!-- Chapter Navigation -->
+<div class="ch-nav">
+  <a href="ch07-execution.html">
+    <span class="dir">← 上一章</span>
+    Ch07 执行时间轴
+  </a>
+  <a href="ch09-config.html">
+    <span class="dir">下一章 →</span>
+    Ch09 配置管线
+  </a>
+</div>
+
+</main>
+</div>
+</body>
+</html>

@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ch04 — Ability 技能/Buff 核心系统 | EGamePlay</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&family=Noto+Sans+SC:wght@400;600;700;900&family=JetBrains+Mono:wght@400;600&family=Playfair+Display:wght@900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="doc-layout">
+
+<!-- Sidebar -->
+<nav class="doc-sidebar">
+  <div class="nav-brand"><a href="index.html">EGamePlay</a></div>
+  <div class="nav-section">Chapters</div>
+  <ul class="nav-list">
+    <li><a href="ch01-ecsnode.html"><span class="ch-num">01</span> EcsNode 框架底座</a></li>
+    <li><a href="ch02-numeric.html"><span class="ch-num">02</span> 数值系统</a></li>
+    <li><a href="ch03-combat-entity.html"><span class="ch-num">03</span> 战斗实体</a></li>
+    <li><a class="active" href="ch04-ability.html"><span class="ch-num">04</span> 技能/Buff 核心</a></li>
+    <li><a href="ch05-effect.html"><span class="ch-num">05</span> 效果系统</a></li>
+    <li><a href="ch06-trigger.html"><span class="ch-num">06</span> 触发系统</a></li>
+    <li><a href="ch07-execution.html"><span class="ch-num">07</span> 执行时间轴</a></li>
+    <li><a href="ch08-action.html"><span class="ch-num">08</span> 行动系统</a></li>
+    <li><a href="ch09-config.html"><span class="ch-num">09</span> 配置管线</a></li>
+  </ul>
+  <div class="nav-section" style="margin-top:24px">本章目录</div>
+  <ul class="nav-list">
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#entity">Ability 实体结构</a></li>
+    <li><a href="#awake">Awake 初始化流程</a></li>
+    <li><a href="#lifecycle">生命周期管理</a></li>
+    <li><a href="#attach-remove">Attach / Remove API</a></li>
+    <li><a href="#unification">Skill vs Buff 统一</a></li>
+    <li><a href="#flow">完整生命周期流程图</a></li>
+    <li><a href="#summary">设计总结</a></li>
+  </ul>
+</nav>
+
+<!-- Main Content -->
+<main class="doc-main">
+<div class="ch-header">
+  <div class="ch-kicker">Chapter 04</div>
+  <h1>Ability — <span class="accent">技能/Buff 核心系统</span></h1>
+  <p class="ch-subtitle">EGamePlay 最核心的设计决策之一：技能和 Buff 是同一个东西。Ability 是统一的「能力」抽象，IsBuff 只是一个标志位。这消除了大量重复代码和特殊处理逻辑。</p>
+</div>
+
+<!-- ===== 1. Overview ===== -->
+<h2 id="overview"><span class="num">4.1</span> 概述</h2>
+
+<div class="callout">
+  <div class="callout-title">核心定位</div>
+  Ability 是 EGamePlay 战斗系统中最重要的 Entity 类型。它代表一个「能力」——可以是主动技能、被动技能、Buff、Debuff、光环等任何可以挂载到战斗实体上的行为声明。<br><br>
+  <strong>关键洞察：</strong>技能和 Buff 在数据结构上完全一致，差异仅在于激活方式和持续时间管理。统一它们是这套框架最精妙的设计决策。
+</div>
+
+<div class="section-label">文件位置</div>
+<pre class="code"><span class="file-tag">目录结构</span>
+Assets/App.Model/.../com.model.egameplay/Ability/
+├── Ability.cs                    <span class="cm">// Ability 实体定义（30行）</span>
+├── AbilityDurationComponent.cs   <span class="cm">// 持续时间组件（17行）</span>
+└── AbilityEffect/                <span class="cm">// 效果子系统（Ch05 详述）</span>
+
+Assets/App.System/.../com.system.egameplay/Ability/
+├── AbilitySystem.cs              <span class="cm">// 核心 System（183行）</span>
+├── AbilityDurationSystem.cs      <span class="cm">// 持续时间更新（42行）</span>
+└── AbilityEffect/                <span class="cm">// 效果系统集合</span>
+</pre>
+
+<!-- ===== 2. Entity ===== -->
+<h2 id="entity"><span class="num">4.2</span> Ability 实体结构</h2>
+
+<p>Ability 继承自 EcsEntity，是一个轻量级的数据容器。它持有配置引用、运行时状态、以及子实体列表（Effects 和 Triggers）。</p>
+
+<pre class="code"><span class="file-tag">Ability.cs — 完整源码</span>
+<span class="kw">namespace</span> EGamePlay.Combat
+{
+    <span class="kw">public partial class</span> <span class="tp">Ability</span> : <span class="tp">EcsEntity</span>
+    {
+        <span class="cm">// ═══════════ 所有权 ═══════════</span>
+        <span class="kw">public</span> <span class="tp">CombatEntity</span> <span class="fn">OwnerEntity</span> { <span class="kw">get</span> { <span class="kw">return</span> GetParent&lt;<span class="tp">CombatEntity</span>&gt;(); } <span class="kw">set</span> { } }
+        <span class="kw">public</span> <span class="tp">EcsEntity</span> <span class="fn">ParentEntity</span> { <span class="kw">get</span> => Parent; }
+
+        <span class="cm">// ═══════════ 配置数据 ═══════════</span>
+        <span class="kw">public</span> <span class="tp">AbilityConfig</span> <span class="fn">Config</span> { <span class="kw">get</span>; <span class="kw">set</span>; }              <span class="cm">// 运行时从表加载的配置</span>
+        <span class="kw">public</span> <span class="tp">AbilityConfigObject</span> <span class="fn">ConfigObject</span> { <span class="kw">get</span>; <span class="kw">set</span>; }  <span class="cm">// ScriptableObject 配置</span>
+
+        <span class="cm">// ═══════════ 运行时状态 ═══════════</span>
+        <span class="kw">public bool</span> <span class="fn">Spelling</span> { <span class="kw">get</span>; <span class="kw">set</span>; }                     <span class="cm">// 是否正在施法</span>
+        <span class="kw">public</span> <span class="tp">GameTimer</span> <span class="fn">CooldownTimer</span> { <span class="kw">get</span>; } = <span class="kw">new</span> <span class="tp">GameTimer</span>(<span class="nm">1f</span>);  <span class="cm">// 冷却计时器</span>
+        <span class="kw">public</span> <span class="tp">ExecutionObject</span> <span class="fn">ExecutionObject</span> { <span class="kw">get</span>; <span class="kw">set</span>; }  <span class="cm">// 执行时间轴配置</span>
+
+        <span class="cm">// ═══════════ 类型判断 ═══════════</span>
+        <span class="kw">public bool</span> <span class="fn">IsBuff</span> => Config.Type == <span class="st">"Buff"</span>;            <span class="cm">// ★ 只是一个属性判断</span>
+        <span class="kw">public bool</span> <span class="fn">IsSkill</span> => !IsBuff;
+
+        <span class="cm">// ═══════════ 名称 ═══════════</span>
+        <span class="kw">public string</span> <span class="fn">Name</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+
+        <span class="cm">// ═══════════ 子实体集合 ═══════════</span>
+        <span class="kw">public</span> <span class="tp">List</span>&lt;<span class="tp">AbilityEffect</span>&gt; <span class="fn">AbilityEffects</span> { <span class="kw">get</span>; <span class="kw">private set</span>; }
+            = <span class="kw">new</span> <span class="tp">List</span>&lt;<span class="tp">AbilityEffect</span>&gt;();
+        <span class="kw">public</span> <span class="tp">List</span>&lt;<span class="tp">AbilityTrigger</span>&gt; <span class="fn">AbilityTriggers</span> { <span class="kw">get</span>; <span class="kw">private set</span>; }
+            = <span class="kw">new</span> <span class="tp">List</span>&lt;<span class="tp">AbilityTrigger</span>&gt;();
+    }
+}
+</pre>
+
+<div class="callout good">
+  <div class="callout-title">设计洞察 — 数据结构极简</div>
+  Ability 本身只有 <strong>30 行代码</strong>。所有属性都是直球声明，没有任何逻辑方法。这正是 ECS「数据与逻辑分离」的体现 — 所有行为在 AbilitySystem 中。<br><br>
+  <code>OwnerEntity</code> 通过 <code>GetParent&lt;CombatEntity&gt;()</code> 获得，利用了 EcsNode 的层级关系，而不是额外存储一个引用。
+</div>
+
+<h3>属性用途一览</h3>
+<table class="data">
+  <thead><tr><th>属性</th><th>类型</th><th>来源</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><code>Config</code></td><td>AbilityConfig</td><td>Awake 时从表加载</td><td>运行时配置（Type、TargetGroup 等）</td></tr>
+    <tr><td><code>ConfigObject</code></td><td>AbilityConfigObject</td><td>Attach 时注入</td><td>ScriptableObject，含 Effects/Triggers 列表</td></tr>
+    <tr><td><code>Spelling</code></td><td>bool</td><td>运行时设置</td><td>施法过程中为 true，防止重复施放</td></tr>
+    <tr><td><code>CooldownTimer</code></td><td>GameTimer</td><td>创建时初始化</td><td>冷却倒计时</td></tr>
+    <tr><td><code>ExecutionObject</code></td><td>ExecutionObject</td><td>Awake 末尾加载</td><td>技能执行时间轴（可能不存在）</td></tr>
+    <tr><td><code>AbilityEffects</code></td><td>List&lt;AbilityEffect&gt;</td><td>Awake 时创建</td><td>效果子实体集合</td></tr>
+    <tr><td><code>AbilityTriggers</code></td><td>List&lt;AbilityTrigger&gt;</td><td>Awake 时创建</td><td>触发器子实体集合</td></tr>
+  </tbody>
+</table>
+
+<!-- ===== 3. Awake ===== -->
+<h2 id="awake"><span class="num">4.3</span> AbilitySystem.Awake — 初始化流程</h2>
+
+<p>Awake 是 Ability 创建后立刻执行的初始化逻辑。它从配置表加载数据、解析目标规则、创建子实体（Effect/Trigger），最后加载执行时间轴资源。</p>
+
+<pre class="code"><span class="file-tag">AbilitySystem.cs — Awake</span>
+<span class="kw">public void</span> <span class="fn">Awake</span>(<span class="tp">Ability</span> entity)
+{
+    <span class="cm">// ① 从配置表加载 AbilityConfig</span>
+    entity.Config = AppStatic.Config.Get&lt;<span class="tp">AbilityConfig</span>&gt;(entity.ConfigObject.Id);
+    entity.Name = entity.Config.Name;
+
+    <span class="cm">// ② 解析目标阵营类型</span>
+    <span class="fn">CheckAffectTargetType</span>(entity);
+
+    <span class="cm">// ③ 解析目标选取方式</span>
+    <span class="fn">CheckTargetSelectType</span>(entity);
+
+    <span class="cm">// ④ 创建所有 AbilityEffect 子实体</span>
+    <span class="kw">foreach</span> (<span class="kw">var</span> item <span class="kw">in</span> entity.ConfigObject.Effects)
+    {
+        <span class="kw">var</span> abilityEffect = AbilityEffectSystem.<span class="fn">Create</span>(entity, item);
+        abilityEffect.<span class="fn">Init</span>();
+        entity.AbilityEffects.Add(abilityEffect);
+    }
+
+    <span class="cm">// ⑤ 创建所有 AbilityTrigger 子实体</span>
+    <span class="kw">foreach</span> (<span class="kw">var</span> item <span class="kw">in</span> entity.ConfigObject.TriggerActions)
+    {
+        <span class="kw">var</span> abilityTrigger = AbilityTriggerSystem.<span class="fn">Create</span>(entity, item);
+        abilityTrigger.<span class="fn">Init</span>();
+        entity.AbilityTriggers.Add(abilityTrigger);
+    }
+
+    <span class="cm">// ⑥ 加载执行时间轴</span>
+    <span class="fn">LoadExecution</span>(entity);
+}
+</pre>
+
+<h3>CheckAffectTargetType — 目标阵营解析</h3>
+<pre class="code"><span class="file-tag">AbilitySystem.cs — 阵营映射</span>
+<span class="kw">private static void</span> <span class="fn">CheckAffectTargetType</span>(<span class="tp">Ability</span> entity)
+{
+    <span class="kw">if</span> (entity.Config.TargetGroup == <span class="st">"己方"</span>)
+    {
+        entity.ConfigObject.AffectTargetType = SkillAffectTargetType.SelfTeam;
+    }
+    <span class="kw">else if</span> (entity.Config.TargetGroup == <span class="st">"敌方"</span>)
+    {
+        entity.ConfigObject.AffectTargetType = SkillAffectTargetType.EnemyTeam;
+    }
+    <span class="kw">else if</span> (entity.Config.TargetGroup == <span class="st">"自身"</span>)
+    {
+        entity.ConfigObject.AffectTargetType = SkillAffectTargetType.Self;
+    }
+    <span class="kw">else</span>
+    {
+        Log.<span class="fn">Error</span>($<span class="st">"技能目标阵营错误 {entity.Config.TargetGroup}"</span>);
+    }
+}
+</pre>
+
+<h3>CheckTargetSelectType — 目标选取方式</h3>
+<pre class="code"><span class="file-tag">AbilitySystem.cs — 选取映射</span>
+<span class="kw">private static void</span> <span class="fn">CheckTargetSelectType</span>(<span class="tp">Ability</span> entity)
+{
+    <span class="kw">if</span> (entity.IsSkill)  <span class="cm">// ← 只有技能需要设置选取方式，Buff 直接作用于持有者</span>
+    {
+        <span class="kw">if</span> (entity.Config.TargetSelect == <span class="st">"碰撞检测"</span>)
+        {
+            entity.ConfigObject.TargetSelectType = SkillTargetSelectType.CollisionSelect;
+        }
+        <span class="kw">else if</span> (entity.Config.TargetSelect == <span class="st">"条件指定"</span>)
+        {
+            entity.ConfigObject.TargetSelectType = SkillTargetSelectType.ConditionSelect;
+        }
+        <span class="kw">else if</span> (entity.Config.TargetSelect == <span class="st">"手动指定"</span>)
+        {
+            entity.ConfigObject.TargetSelectType = SkillTargetSelectType.PlayerSelect;
+        }
+        <span class="kw">else</span>
+        {
+            Log.<span class="fn">Error</span>($<span class="st">"目标选取类型错误 {entity.Config.TargetSelect}"</span>);
+        }
+    }
+}
+</pre>
+
+<div class="callout warn">
+  <div class="callout-title">中文字符串作为配置键</div>
+  注意 <code>"己方"</code>、<code>"碰撞检测"</code> 等使用中文字符串匹配。这来自策划的 Excel 配置表。好处是策划可以直接阅读和编辑；坏处是拼写错误无编译期保护。框架通过 <code>Log.Error</code> 在运行时捕获不匹配的情况。
+</div>
+
+<h3>LoadExecution — 加载时间轴</h3>
+<pre class="code"><span class="file-tag">AbilitySystem.cs — 资源加载</span>
+<span class="kw">public static void</span> <span class="fn">LoadExecution</span>(<span class="tp">Ability</span> entity)
+{
+    entity.ExecutionObject = AssetUtils.<span class="fn">LoadObject</span>&lt;<span class="tp">ExecutionObject</span>&gt;(
+        $<span class="st">"{AbilityManagerObject.ExecutionResFolder}/Execution_{entity.ConfigObject.Id}"</span>);
+    <span class="kw">if</span> (entity.ExecutionObject == <span class="kw">null</span>)
+    {
+        <span class="kw">return</span>;  <span class="cm">// Buff 通常没有执行时间轴，这是正常的</span>
+    }
+}
+</pre>
+
+<div class="callout good">
+  <div class="callout-title">Awake 初始化的 6 步设计</div>
+  Awake 的步骤顺序是精心设计的：<br>
+  ① Config 必须最先加载，因为后续步骤都依赖它<br>
+  ② ③ 解析配置中的字符串为枚举（将不确定性在初始化时解决）<br>
+  ④ ⑤ 创建子实体（Effect 和 Trigger 需要读取 Config 数据）<br>
+  ⑥ LoadExecution 最后执行，因为它可能失败（Buff 没有 Execution），且不影响前面的步骤
+</div>
+
+<!-- ===== 4. Lifecycle ===== -->
+<h2 id="lifecycle"><span class="num">4.4</span> 生命周期管理</h2>
+
+<p>AbilitySystem 实现了 <code>IEnable</code>、<code>IDisable</code>、<code>IUpdate</code> 三个生命周期接口，控制 Ability 的激活/暂停/持续运行。</p>
+
+<h3>Enable — 激活</h3>
+<pre class="code"><span class="file-tag">AbilitySystem.cs — Enable</span>
+<span class="kw">public void</span> <span class="fn">Enable</span>(<span class="tp">Ability</span> entity)
+{
+    <span class="cm">// 级联启用所有 Effect</span>
+    <span class="kw">foreach</span> (<span class="kw">var</span> item <span class="kw">in</span> entity.AbilityEffects)
+    {
+        item.Enable = <span class="kw">true</span>;
+    }
+    <span class="cm">// 级联启用所有 Trigger</span>
+    <span class="kw">foreach</span> (<span class="kw">var</span> item <span class="kw">in</span> entity.AbilityTriggers)
+    {
+        item.Enable = <span class="kw">true</span>;
+    }
+}
+</pre>
+
+<h3>Disable — 禁用</h3>
+<pre class="code"><span class="file-tag">AbilitySystem.cs — Disable</span>
+<span class="kw">public void</span> <span class="fn">Disable</span>(<span class="tp">Ability</span> entity)
+{
+    <span class="cm">// 级联禁用所有 Effect</span>
+    <span class="kw">foreach</span> (<span class="kw">var</span> item <span class="kw">in</span> entity.AbilityEffects)
+    {
+        item.Enable = <span class="kw">false</span>;
+    }
+    <span class="cm">// 级联禁用所有 Trigger</span>
+    <span class="kw">foreach</span> (<span class="kw">var</span> item <span class="kw">in</span> entity.AbilityTriggers)
+    {
+        item.Enable = <span class="kw">false</span>;
+    }
+}
+</pre>
+
+<div class="callout">
+  <div class="callout-title">级联的双重含义</div>
+  当 <code>Ability.Enable = true</code> 时，EcsNode 首先触发 <code>AbilitySystem.Enable()</code>（上面的代码），它显式启用 Effects 和 Triggers。<br>
+  而 EcsEntity 的 Enable setter 本身也会级联启用所有 Components（参见 Ch01）。<br><br>
+  效果：一行 <code>ability.Enable = true</code> 同时启用了 Effects + Triggers + Components 三个维度。
+</div>
+
+<h3>Update — 持续时间追踪</h3>
+<pre class="code"><span class="file-tag">AbilitySystem.cs — Update</span>
+<span class="kw">public void</span> <span class="fn">Update</span>(<span class="tp">Ability</span> entity)
+{
+    <span class="kw">if</span> (entity.GetComponent&lt;<span class="tp">AbilityDurationComponent</span>&gt;() <span class="kw">is</span> { } component)
+    {
+        AbilityDurationSystem.<span class="fn">Update</span>(entity, component);
+    }
+}
+</pre>
+
+<h3>AbilityDurationSystem — 持续时间管理</h3>
+<pre class="code"><span class="file-tag">AbilityDurationSystem.cs — 完整源码</span>
+<span class="kw">public class</span> <span class="tp">AbilityDurationSystem</span> : <span class="tp">AComponentSystem</span>&lt;<span class="tp">Ability</span>, <span class="tp">AbilityDurationComponent</span>&gt;,
+    <span class="tp">IAwake</span>&lt;<span class="tp">Ability</span>, <span class="tp">AbilityDurationComponent</span>&gt;
+{
+    <span class="kw">public void</span> <span class="fn">Awake</span>(<span class="tp">Ability</span> entity, <span class="tp">AbilityDurationComponent</span> component)
+    {
+        <span class="kw">var</span> lifeTime = component.Duration;
+        component.LifeTimer = <span class="kw">new</span> <span class="tp">GameTimer</span>(lifeTime);
+    }
+
+    <span class="kw">public static void</span> <span class="fn">Update</span>(<span class="tp">Ability</span> entity, <span class="tp">AbilityDurationComponent</span> component)
+    {
+        <span class="kw">if</span> (component.LifeTimer.IsRunning)
+        {
+            component.LifeTimer.<span class="fn">UpdateAsFinish</span>(Time.deltaTime, () => <span class="fn">OnTimeEnd</span>(entity));
+        }
+    }
+
+    <span class="kw">public static void</span> <span class="fn">OnTimeEnd</span>(<span class="tp">Ability</span> ability)
+    {
+        <span class="kw">var</span> config = ability.Config;
+        <span class="kw">if</span> (config.Type == <span class="st">"Skill"</span>)
+        {
+            SkillSystem.<span class="fn">Remove</span>(ability.ParentEntity <span class="kw">as</span> <span class="tp">CombatEntity</span>, ability);
+        }
+        <span class="kw">if</span> (config.Type == <span class="st">"Buff"</span>)
+        {
+            BuffSystem.<span class="fn">Remove</span>(ability.ParentEntity <span class="kw">as</span> <span class="tp">CombatEntity</span>, ability);
+        }
+    }
+}
+</pre>
+
+<div class="callout good">
+  <div class="callout-title">持续时间是可选的</div>
+  <code>AbilityDurationComponent</code> 只在需要时挂载。被动技能永远不挂它（永久生效），Buff 在 Attach 时根据配置挂载。<br>
+  AbilitySystem.Update 用 <code>is { } component</code> 模式匹配安全获取 — 如果没有这个组件，整个 Update 就是空操作。<br>
+  <strong>零特殊情况，纯组合式设计。</strong>
+</div>
+
+<!-- ===== 5. Attach/Remove ===== -->
+<h2 id="attach-remove"><span class="num">4.5</span> Attach / Remove — 挂载与移除</h2>
+
+<p>Ability 通过 <code>AbilitySystem.Attach</code> 挂载到 CombatEntity 上，通过 <code>AbilitySystem.Remove</code> 移除。这是外部代码与 Ability 系统交互的唯一入口。</p>
+
+<pre class="code"><span class="file-tag">AbilitySystem.cs — Attach</span>
+<span class="cm">/// 挂载能力，技能、被动、buff等都通过这个接口挂载</span>
+<span class="kw">public static</span> <span class="tp">Ability</span> <span class="fn">Attach</span>(<span class="tp">CombatEntity</span> entity, <span class="kw">object</span> configObject)
+{
+    <span class="cm">// ① 获取 AbilityComponent（存放所有 Ability 的容器）</span>
+    <span class="kw">var</span> component = entity.GetComponent&lt;<span class="tp">AbilityComponent</span>&gt;();
+
+    <span class="cm">// ② 创建 Ability 子实体，在 Awake 前注入 ConfigObject</span>
+    <span class="kw">var</span> ability = entity.<span class="fn">AddChild</span>&lt;<span class="tp">Ability</span>&gt;(x => x.ConfigObject = configObject <span class="kw">as</span> <span class="tp">AbilityConfigObject</span>);
+    <span class="cm">// ↑ AddChild 触发 AbilitySystem.Awake → 加载配置、创建子实体</span>
+
+    <span class="cm">// ③ 添加等级组件</span>
+    ability.<span class="fn">AddComponent</span>&lt;<span class="tp">AbilityLevelComponent</span>&gt;();
+
+    <span class="cm">// ④ 手动触发 Init（延迟初始化）</span>
+    ability.<span class="fn">Init</span>();
+
+    <span class="cm">// ⑤ 注册到 AbilityComponent 的 ID 映射表</span>
+    component.IdAbilities.Add(ability.Id, ability);
+
+    <span class="kw">return</span> ability;
+}
+</pre>
+
+<pre class="code"><span class="file-tag">AbilitySystem.cs — Remove</span>
+<span class="kw">public static void</span> <span class="fn">Remove</span>(<span class="tp">CombatEntity</span> entity, <span class="tp">Ability</span> ability)
+{
+    <span class="cm">// ① 从注册表移除</span>
+    <span class="kw">var</span> component = entity.GetComponent&lt;<span class="tp">AbilityComponent</span>&gt;();
+    component.IdAbilities.Remove(ability.Id);
+
+    <span class="cm">// ② 结束能力（Disable + Destroy）</span>
+    <span class="fn">EndAbility</span>(ability);
+}
+
+<span class="kw">public static void</span> <span class="fn">EndAbility</span>(<span class="tp">Ability</span> entity)
+{
+    <span class="fn">DeactivateAbility</span>(entity);   <span class="cm">// Enable = false → 触发所有 IDisable</span>
+    EcsObject.<span class="fn">Destroy</span>(entity);    <span class="cm">// 销毁 Entity + 递归销毁子树</span>
+}
+</pre>
+
+<div class="callout">
+  <div class="callout-title">Attach 执行序列详解</div>
+  <code>Attach(entity, config)</code> 一调用，以下事件按顺序发生：<br><br>
+  1. <code>AddChild&lt;Ability&gt;()</code> → 创建 Ability 实例，设置 Parent<br>
+  2. initAction 执行 → <code>ConfigObject = configObject</code><br>
+  3. EcsNode 触发 <code>AbilitySystem.Awake()</code> → 加载 Config、创建 Effects/Triggers<br>
+  4. <code>AddComponent&lt;AbilityLevelComponent&gt;()</code> → 挂载等级组件<br>
+  5. <code>ability.Init()</code> → 触发 IInit System（如有）<br>
+  6. 注册到 <code>IdAbilities</code> 字典<br><br>
+  注意 Awake 在第 3 步，此时 ConfigObject 已在第 2 步设好。<strong>initAction 的存在确保了 Awake 能安全读取配置。</strong>
+</div>
+
+<h3>ActivateAbility / DeactivateAbility</h3>
+<pre class="code"><span class="file-tag">AbilitySystem.cs — 激活/停用</span>
+<span class="kw">public static void</span> <span class="fn">TryActivateAbility</span>(<span class="tp">Ability</span> entity)
+{
+    <span class="fn">ActivateAbility</span>(entity);
+}
+
+<span class="kw">public static void</span> <span class="fn">ActivateAbility</span>(<span class="tp">Ability</span> entity)
+{
+    entity.Enable = <span class="kw">true</span>;   <span class="cm">// 触发 AbilitySystem.Enable → 级联启用</span>
+}
+
+<span class="kw">public static void</span> <span class="fn">DeactivateAbility</span>(<span class="tp">Ability</span> entity)
+{
+    entity.Enable = <span class="kw">false</span>;  <span class="cm">// 触发 AbilitySystem.Disable → 级联禁用</span>
+}
+</pre>
+
+<!-- ===== 6. Unification ===== -->
+<h2 id="unification"><span class="num">4.6</span> Skill vs Buff — 统一设计</h2>
+
+<p>这是整个框架最重要的架构决策：<strong>技能和 Buff 使用完全相同的 Ability 类</strong>。差异仅通过配置和组件组合来区分。</p>
+
+<div class="card-grid">
+  <div class="card">
+    <div class="card-title">技能 (Skill)</div>
+    <div class="card-body">
+      • <code>Config.Type == "Skill"</code><br>
+      • 有 ExecutionObject（技能表现时间轴）<br>
+      • 有目标选取（CollisionSelect / PlayerSelect）<br>
+      • 通常通过 Trigger 触发 Effect<br>
+      • 可能有冷却（CooldownTimer）<br>
+      • 可能有持续时间（引导型技能）
+    </div>
+  </div>
+  <div class="card green">
+    <div class="card-title">Buff / Debuff</div>
+    <div class="card-body">
+      • <code>Config.Type == "Buff"</code><br>
+      • 通常无 ExecutionObject<br>
+      • 目标 = 自身（TargetGroup = "自身"）<br>
+      • Enable 时 Effect 直接生效（属性修改/行为控制）<br>
+      • 几乎总有 AbilityDurationComponent<br>
+      • 持续时间结束自动 Remove
+    </div>
+  </div>
+</div>
+
+<pre class="code"><span class="file-tag">统一机制 — IsBuff 只是一个标志</span>
+<span class="cm">// Ability.cs 中只有这一行区分 Skill 和 Buff：</span>
+<span class="kw">public bool</span> <span class="fn">IsBuff</span> => Config.Type == <span class="st">"Buff"</span>;
+
+<span class="cm">// AbilityDurationSystem.OnTimeEnd — 结束时根据类型调用不同的 Remove</span>
+<span class="kw">if</span> (config.Type == <span class="st">"Skill"</span>)
+    SkillSystem.<span class="fn">Remove</span>(ability.ParentEntity <span class="kw">as</span> CombatEntity, ability);
+<span class="kw">if</span> (config.Type == <span class="st">"Buff"</span>)
+    BuffSystem.<span class="fn">Remove</span>(ability.ParentEntity <span class="kw">as</span> CombatEntity, ability);
+
+<span class="cm">// SkillSystem.Remove 和 BuffSystem.Remove 最终都调用 AbilitySystem.Remove</span>
+<span class="cm">// 区别仅在于它们各自的事件通知（如 UI 刷新、Buff 图标移除等）</span>
+</pre>
+
+<div class="callout good">
+  <div class="callout-title">为什么这个设计是对的</div>
+  传统做法是 Skill 和 Buff 各有一套类体系，导致：<br>
+  • 伤害效果写两套（技能伤害 + Buff 伤害）<br>
+  • 属性修改写两套<br>
+  • 持续时间管理写两套<br>
+  • 触发条件写两套<br><br>
+  统一为 Ability 后，<strong>所有这些都只需要一套实现</strong>。Buff 给目标加状态？那就是一个 EffectAddBuff，和技能施加 Buff 走完全相同的代码路径。<br><br>
+  Linus 会说：「好的设计消除特殊情况，而不是增加 if 分支。」
+</div>
+
+<h3>实际代码路径对比</h3>
+<table class="data">
+  <thead><tr><th>行为</th><th>技能的路径</th><th>Buff 的路径</th></tr></thead>
+  <tbody>
+    <tr><td>挂载</td><td><code>AbilitySystem.Attach()</code></td><td><code>AbilitySystem.Attach()</code></td></tr>
+    <tr><td>激活</td><td>手动调用 ActivateAbility</td><td>挂载后立即 Enable</td></tr>
+    <tr><td>效果生效</td><td>Trigger 触发 → TriggerApply</td><td>Enable → Effect IEnable</td></tr>
+    <tr><td>持续时间</td><td>AbilityDurationComponent（可选）</td><td>AbilityDurationComponent（必有）</td></tr>
+    <tr><td>移除</td><td>AbilitySystem.Remove</td><td>AbilitySystem.Remove</td></tr>
+  </tbody>
+</table>
+
+<!-- ===== 7. Flow ===== -->
+<h2 id="flow"><span class="num">4.7</span> 完整生命周期流程图</h2>
+
+<div class="flow flow-v">
+  <div class="flow-row">
+    <div class="flow-node blue">AbilitySystem.Attach(entity, config)</div>
+    <span class="flow-label">外部调用入口</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node purple">entity.AddChild&lt;Ability&gt;(x => x.ConfigObject = config)</div>
+    <span class="flow-label">创建 Entity，注入配置</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node purple">AbilitySystem.Awake()</div>
+    <span class="flow-label">加载 Config、解析类型、创建 Effects/Triggers、加载 Execution</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node ghost">AddComponent&lt;AbilityLevelComponent&gt;()</div>
+    <span class="flow-label">挂载等级组件</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node cyan">ability.Init()</div>
+    <span class="flow-label">触发 IInit System（延迟初始化）</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node green">ability.Enable = true → AbilitySystem.Enable()</div>
+    <span class="flow-label">级联启用 Effects + Triggers + Components</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node warn">AbilitySystem.Update() 每帧</div>
+    <span class="flow-label">检查 Duration → LifeTimer.UpdateAsFinish</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node ghost">ability.Enable = false → AbilitySystem.Disable()</div>
+    <span class="flow-label">级联禁用 — Effect 回退属性修改</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node red">EcsObject.Destroy(ability)</div>
+    <span class="flow-label">递归销毁子树（Effects、Triggers、Components）</span>
+  </div>
+</div>
+
+<!-- ===== 8. Summary ===== -->
+<h2 id="summary"><span class="num">4.8</span> 设计总结</h2>
+
+<div class="card-grid">
+  <div class="card">
+    <div class="card-title">统一抽象的代价</div>
+    <div class="card-body">Skill 和 Buff 共享一个类意味着 Ability 上可能存在对当前类型无意义的属性（如 Buff 的 CooldownTimer 永远不用）。这点内存浪费换来的是代码复用和架构简洁，是值得的。</div>
+  </div>
+  <div class="card green">
+    <div class="card-title">组合式能力声明</div>
+    <div class="card-body">一个 Ability 的行为完全由它的 Effects 和 Triggers 列表决定。同样的 EffectDamageComponent 可以出现在技能的 Effect 上，也可以出现在 Buff 的 Effect 上。<strong>零代码重复。</strong></div>
+  </div>
+  <div class="card warn">
+    <div class="card-title">Enable 是核心机制</div>
+    <div class="card-body">整个系统的激活/停用都通过 Enable 属性驱动。一行 <code>ability.Enable = false</code> 触发完整的回退链：Disable System → 移除 Modifier → 数值恢复。极简的 API，强大的效果。</div>
+  </div>
+  <div class="card bad">
+    <div class="card-title">已知局限</div>
+    <div class="card-body">• 字符串类型判断（"Skill"/"Buff"）缺少编译期安全<br>• 没有 Ability 堆叠机制（同名 Buff 叠加需要额外处理）<br>• AbilityDurationSystem 通过手动 Update 调用而非 EcsNode 自动驱动</div>
+  </div>
+</div>
+
+<div class="callout good">
+  <div class="callout-title">验收标准 — 读完本章后你应该能回答</div>
+  1. Ability 的 Awake 流程中，6 个步骤为什么是这个顺序？调换顺序会出什么问题？<br>
+  2. <code>AbilitySystem.Attach()</code> 中 <code>AddChild&lt;Ability&gt;(x => x.ConfigObject = config)</code> 为什么要用 initAction 注入 ConfigObject？<br>
+  3. Skill 和 Buff 在代码层面的唯一区别是什么？它们共享了哪些基础设施？<br>
+  4. 当 <code>ability.Enable = true</code> 时，从 EcsNode 到最终 Effect 生效，经过了几层级联？<br>
+  5. AbilityDurationComponent 不是所有 Ability 都有，这带来了什么好处？
+</div>
+
+<!-- Chapter Navigation -->
+<div class="ch-nav">
+  <a href="ch03-combat-entity.html">
+    <span class="dir">← 上一章</span>
+    Ch03 战斗实体
+  </a>
+  <a href="ch05-effect.html">
+    <span class="dir">下一章 →</span>
+    Ch05 效果系统
+  </a>
+</div>
+
+</main>
+</div>
+</body>
+</html>

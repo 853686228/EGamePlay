@@ -1,0 +1,821 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ch06 — AbilityTrigger 触发系统 | EGamePlay</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&family=Noto+Sans+SC:wght@400;600;700;900&family=JetBrains+Mono:wght@400;600&family=Playfair+Display:wght@900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="doc-layout">
+
+<!-- Sidebar -->
+<nav class="doc-sidebar">
+  <div class="nav-brand"><a href="index.html">EGamePlay</a></div>
+  <div class="nav-section">Chapters</div>
+  <ul class="nav-list">
+    <li><a href="ch01-ecsnode.html"><span class="ch-num">01</span> EcsNode 框架底座</a></li>
+    <li><a href="ch02-numeric.html"><span class="ch-num">02</span> 数值系统</a></li>
+    <li><a href="ch03-combat-entity.html"><span class="ch-num">03</span> 战斗实体</a></li>
+    <li><a href="ch04-ability.html"><span class="ch-num">04</span> 技能/Buff 核心</a></li>
+    <li><a href="ch05-effect.html"><span class="ch-num">05</span> 效果系统</a></li>
+    <li><a class="active" href="ch06-trigger.html"><span class="ch-num">06</span> 触发系统</a></li>
+    <li><a href="ch07-execution.html"><span class="ch-num">07</span> 执行时间轴</a></li>
+    <li><a href="ch08-action.html"><span class="ch-num">08</span> 行动系统</a></li>
+    <li><a href="ch09-config.html"><span class="ch-num">09</span> 配置管线</a></li>
+  </ul>
+  <div class="nav-section" style="margin-top:24px">本章目录</div>
+  <ul class="nav-list">
+    <li><a href="#entity">AbilityTrigger 实体</a></li>
+    <li><a href="#create">Create 工厂方法</a></li>
+    <li><a href="#enable">Enable 三种触发模式</a></li>
+    <li><a href="#ontrigger">OnTrigger 核心流程</a></li>
+    <li><a href="#behaviour-observe">BehaviourObserveSystem</a></li>
+    <li><a href="#time-state-observe">TimeStateObserveSystem</a></li>
+    <li><a href="#state-check">TriggerStateCheckSystem</a></li>
+    <li><a href="#composition">组合示例</a></li>
+  </ul>
+</nav>
+
+<!-- Main Content -->
+<main class="doc-main">
+<div class="ch-header">
+  <div class="ch-kicker">Chapter 06</div>
+  <h1>AbilityTrigger — <span class="accent">触发系统</span></h1>
+  <p class="ch-subtitle">决定 Effect 何时、对谁、在什么条件下生效。Trigger 是 Ability 逻辑层的「时序调度器」— 它不做伤害/治疗/加 Buff 的实际操作，只负责判定「此刻是否应该触发效果」，然后把控制权交给 Effect。</p>
+</div>
+
+<!-- ===== 1. AbilityTrigger Entity ===== -->
+<h2 id="entity"><span class="num">6.1</span> AbilityTrigger 实体</h2>
+
+<p>AbilityTrigger 是 Ability 的子实体（<code>Ability → AbilityTrigger</code>）。一个 Ability 可以有多个 Trigger，每个 Trigger 对应一种触发方式。</p>
+
+<pre class="code"><span class="file-tag">AbilityTrigger.cs</span>
+<span class="kw">public class</span> <span class="tp">AbilityTrigger</span> : <span class="tp">EcsEntity</span>
+{
+    <span class="cm">// ═══════════ 所有权关系 ═══════════</span>
+    <span class="kw">public</span> <span class="tp">Ability</span> <span class="fn">OwnerAbility</span> { <span class="kw">get</span>; <span class="kw">set</span>; }       <span class="cm">// 所属技能/Buff</span>
+    <span class="kw">public</span> <span class="tp">CombatEntity</span> <span class="fn">OwnerEntity</span> { <span class="kw">get</span>; <span class="kw">set</span>; }  <span class="cm">// 施法者（= OwnerAbility.OwnerEntity）</span>
+    <span class="kw">public</span> <span class="tp">EcsEntity</span> <span class="fn">ParentEntity</span> { <span class="kw">get</span>; <span class="kw">set</span>; }     <span class="cm">// 父实体（通常 = Buff 目标或施法者）</span>
+
+    <span class="cm">// ═══════════ 触发配置 ═══════════</span>
+    <span class="kw">public</span> <span class="tp">TriggerConfig</span> <span class="fn">TriggerConfig</span> { <span class="kw">get</span>; <span class="kw">set</span>; }  <span class="cm">// 配置对象（来自 ScriptableObject）</span>
+
+    <span class="cm">// ═══════════ 条件参数 ═══════════</span>
+    <span class="kw">public string</span> <span class="fn">ConditionParamValue</span> { <span class="kw">get</span>; <span class="kw">set</span>; }  <span class="cm">// 条件参数值（如概率 "30"、时间间隔 "2.5"）</span>
+
+    <span class="cm">// ═══════════ 关联效果 ═══════════</span>
+    <span class="kw">public</span> <span class="tp">List</span>&lt;<span class="tp">AbilityEffect</span>&gt; <span class="fn">TriggerEffects</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        = <span class="kw">new</span> <span class="tp">List</span>&lt;<span class="tp">AbilityEffect</span>&gt;();                 <span class="cm">// 触发时要执行的 Effect 列表</span>
+}
+</pre>
+
+<div class="callout">
+  <div class="callout-title">层级关系图</div>
+  <pre style="margin:0;font-family:JetBrains Mono,monospace;font-size:13px;line-height:1.6">
+CombatEntity (角色)
+ └─ Ability (技能/Buff)
+     ├─ AbilityEffect[0] (伤害效果)
+     ├─ AbilityEffect[1] (加 Buff 效果)
+     └─ AbilityTrigger[0] (触发器)
+         ├─ TriggerStateCheckComponent (条件检查)
+         ├─ BehaviourObserveComponent  (行为监听)
+         └─ TimeStateObserveComponent  (定时监听)
+  </pre>
+</div>
+
+<div class="section-label">TriggerConfig 配置结构</div>
+<pre class="code"><span class="file-tag">TriggerConfig（配置层）</span>
+<span class="kw">public class</span> <span class="tp">TriggerConfig</span>
+{
+    <span class="kw">public</span> <span class="tp">EffectAutoTriggerType</span> <span class="fn">AutoTriggerType</span>;   <span class="cm">// 触发方式：Instant / Action / Condition</span>
+    <span class="kw">public string</span> <span class="fn">ConditionParam</span>;                   <span class="cm">// 条件参数（如 "WhenIntervalTime"）</span>
+    <span class="kw">public string</span> <span class="fn">ConditionParamValue</span>;              <span class="cm">// 参数值（如 "2.5" 秒）</span>
+    <span class="kw">public</span> <span class="tp">List</span>&lt;<span class="tp">StateCheckConfig</span>&gt; <span class="fn">StateCheckList</span>;  <span class="cm">// 状态检查列表（触发前的条件门槛）</span>
+    <span class="kw">public</span> <span class="tp">List</span>&lt;<span class="kw">int</span>&gt; <span class="fn">TriggerEffectIds</span>;             <span class="cm">// 关联的 Effect 索引列表</span>
+    <span class="kw">public string</span> <span class="fn">ActionPointType</span>;                  <span class="cm">// 行为事件类型（如 "PostReceiveDamage"）</span>
+}
+</pre>
+
+<table class="data">
+  <thead><tr><th>属性</th><th>类型</th><th>说明</th><th>示例</th></tr></thead>
+  <tbody>
+    <tr><td><code>OwnerAbility</code></td><td>Ability</td><td>所属技能实体</td><td>被动技能"反甲"</td></tr>
+    <tr><td><code>OwnerEntity</code></td><td>CombatEntity</td><td>施法者/Buff 持有者</td><td>装备了反甲的战士</td></tr>
+    <tr><td><code>ParentEntity</code></td><td>EcsEntity</td><td>Trigger 的直接父节点</td><td>通常 = OwnerEntity</td></tr>
+    <tr><td><code>TriggerConfig</code></td><td>TriggerConfig</td><td>SO 配置数据</td><td>AutoTriggerType=Action</td></tr>
+    <tr><td><code>ConditionParamValue</code></td><td>string</td><td>条件参数值</td><td>"30"(概率), "2.5"(秒)</td></tr>
+    <tr><td><code>TriggerEffects</code></td><td>List&lt;AbilityEffect&gt;</td><td>触发时执行的效果列表</td><td>[DamageEffect, DebuffEffect]</td></tr>
+  </tbody>
+</table>
+
+<!-- ===== 2. Create ===== -->
+<h2 id="create"><span class="num">6.2</span> AbilityTriggerSystem.Create — 工厂方法</h2>
+
+<p>Trigger 的创建发生在 Ability 初始化阶段。每个配置中的 TriggerConfig 对应创建一个 AbilityTrigger 子实体。</p>
+
+<pre class="code"><span class="file-tag">AbilityTriggerSystem.cs — Create</span>
+<span class="kw">public static</span> <span class="tp">AbilityTrigger</span> <span class="fn">Create</span>(<span class="tp">Ability</span> ownerAbility, <span class="tp">TriggerConfig</span> triggerConfig)
+{
+    <span class="cm">// 1. 创建 Trigger 子实体</span>
+    <span class="kw">var</span> trigger = ownerAbility.<span class="fn">AddChild</span>&lt;<span class="tp">AbilityTrigger</span>&gt;(x =>
+    {
+        x.OwnerAbility = ownerAbility;
+        x.OwnerEntity = ownerAbility.OwnerEntity;
+        x.ParentEntity = ownerAbility.Parent;
+        x.TriggerConfig = triggerConfig;
+        x.ConditionParamValue = triggerConfig.ConditionParamValue;
+    });
+
+    <span class="cm">// 2. 解析关联的 Effect 列表</span>
+    <span class="kw">foreach</span> (<span class="kw">var</span> effectId <span class="kw">in</span> triggerConfig.TriggerEffectIds)
+    {
+        trigger.TriggerEffects.Add(ownerAbility.AbilityEffects[effectId]);
+    }
+
+    <span class="cm">// 3. 如果配置了状态检查条件，添加 TriggerStateCheckComponent</span>
+    <span class="hl"><span class="kw">if</span> (triggerConfig.StateCheckList != <span class="kw">null</span> && triggerConfig.StateCheckList.Count > <span class="nm">0</span>)</span>
+    <span class="hl">{</span>
+    <span class="hl">    trigger.<span class="fn">AddComponent</span>&lt;<span class="tp">TriggerStateCheckComponent</span>&gt;(comp =></span>
+    <span class="hl">    {</span>
+    <span class="hl">        comp.StateCheckList = triggerConfig.StateCheckList;</span>
+    <span class="hl">    });</span>
+    <span class="hl">}</span>
+
+    <span class="kw">return</span> trigger;
+}
+</pre>
+
+<div class="callout">
+  <div class="callout-title">关键设计 — 条件检查的可选性</div>
+  不是所有 Trigger 都需要状态检查。只有配置了 <code>StateCheckList</code> 的才会挂载 <code>TriggerStateCheckComponent</code>。没有这个组件的 Trigger 在触发时直接跳过状态检查 — <strong>消除特殊情况</strong>（好品味原则：组件不存在 = 不需要检查，无需 if/else 判断）。
+</div>
+
+<!-- ===== 3. Enable ===== -->
+<h2 id="enable"><span class="num">6.3</span> AbilityTriggerSystem.Enable — 三种触发模式</h2>
+
+<p>当 Ability 被启用时，所有子 Trigger 的 Enable 被级联设为 true，触发 <code>AbilityTriggerSystem.Enable()</code>。根据 <code>AutoTriggerType</code> 配置，启用不同的监听机制。</p>
+
+<pre class="code"><span class="file-tag">AbilityTriggerSystem.cs — Enable</span>
+<span class="kw">public void</span> <span class="fn">Enable</span>(<span class="tp">AbilityTrigger</span> entity)
+{
+    <span class="kw">var</span> triggerConfig = entity.TriggerConfig;
+
+    <span class="cm">// ═══════════ 模式 1：立即触发 ═══════════</span>
+    <span class="kw">if</span> (triggerConfig.AutoTriggerType == <span class="tp">EffectAutoTriggerType</span>.<span class="fn">Instant</span>)
+    {
+        <span class="cm">// Buff 生效的瞬间直接执行一次触发</span>
+        <span class="fn">OnTrigger</span>(entity, <span class="kw">new</span> <span class="tp">TriggerContext</span> { Target = entity.ParentEntity });
+    }
+    <span class="cm">// ═══════════ 模式 2：行为事件触发 ═══════════</span>
+    <span class="kw">else if</span> (triggerConfig.AutoTriggerType == <span class="tp">EffectAutoTriggerType</span>.<span class="fn">Action</span>)
+    {
+        <span class="cm">// 添加行为监听组件 — 订阅 ActionPoint 事件</span>
+        entity.<span class="fn">AddComponent</span>&lt;<span class="tp">BehaviourObserveComponent</span>&gt;(comp =>
+        {
+            comp.ActionPointType = triggerConfig.ActionPointType;
+        });
+    }
+    <span class="cm">// ═══════════ 模式 3：条件/定时触发 ═══════════</span>
+    <span class="kw">else if</span> (triggerConfig.AutoTriggerType == <span class="tp">EffectAutoTriggerType</span>.<span class="fn">Condition</span>)
+    {
+        <span class="cm">// 添加时间状态监听组件 — 计时器驱动</span>
+        entity.<span class="fn">AddComponent</span>&lt;<span class="tp">TimeStateObserveComponent</span>&gt;(comp =>
+        {
+            comp.ConditionParam = triggerConfig.ConditionParam;
+            comp.ConditionParamValue = triggerConfig.ConditionParamValue;
+        });
+    }
+}
+</pre>
+
+<div class="card-grid">
+  <div class="card">
+    <div class="card-title">Instant — 立即触发</div>
+    <div class="card-body">Buff 生效瞬间执行一次。典型场景：「装备一件武器，立即获得 +20 攻击力」。Trigger 的存在只是为了走统一的 OnTrigger 流程（状态检查 + Effect 分发）。</div>
+  </div>
+  <div class="card green">
+    <div class="card-title">Action — 行为事件触发</div>
+    <div class="card-body">监听特定行为事件（如 PostReceiveDamage、PostCauseDamage、PreAttack）。典型场景：「受到攻击时，30% 概率反弹 100 伤害」。通过 BehaviourObserveComponent 订阅 ActionPoint。</div>
+  </div>
+  <div class="card warn">
+    <div class="card-title">Condition — 条件/定时触发</div>
+    <div class="card-body">基于时间或条件的触发。典型场景：「每 2 秒回复 50 HP」、「3 秒内未受伤则回复 200 HP」。通过 TimeStateObserveComponent 驱动计时器。</div>
+  </div>
+</div>
+
+<div class="section-label">三种模式的触发时序对比</div>
+<div class="flow flow-v">
+  <div class="flow-row">
+    <div class="flow-node blue">Ability.Enable = true</div>
+    <span class="flow-label">Buff/技能生效</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node purple">AbilityTriggerSystem.Enable(trigger)</div>
+    <span class="flow-label">根据 AutoTriggerType 分流</span>
+  </div>
+  <div class="flow-arrow-d">↓ ↓ ↓</div>
+  <div class="flow-row" style="display:flex;gap:12px;flex-wrap:wrap">
+    <div class="flow-node green" style="flex:1;min-width:160px">Instant<br>→ 直接 OnTrigger()</div>
+    <div class="flow-node cyan" style="flex:1;min-width:160px">Action<br>→ 添加 BehaviourObserve</div>
+    <div class="flow-node warn" style="flex:1;min-width:160px">Condition<br>→ 添加 TimeStateObserve</div>
+  </div>
+  <div class="flow-arrow-d">↓ ↓ ↓</div>
+  <div class="flow-row">
+    <div class="flow-node red">OnTrigger() → EffectAssignAction</div>
+    <span class="flow-label">最终都汇聚到同一个触发入口</span>
+  </div>
+</div>
+
+<!-- ===== 4. OnTrigger ===== -->
+<h2 id="ontrigger"><span class="num">6.4</span> AbilityTriggerSystem.OnTrigger — 核心触发流程</h2>
+
+<p>无论哪种触发模式，最终都调用 <code>OnTrigger</code>。这是整个触发系统最关键的方法 — 它连接了「触发条件判定」和「效果执行」两个世界。</p>
+
+<pre class="code"><span class="file-tag">AbilityTriggerSystem.cs — OnTrigger（完整流程）</span>
+<span class="kw">public static void</span> <span class="fn">OnTrigger</span>(<span class="tp">AbilityTrigger</span> trigger, <span class="tp">TriggerContext</span> context)
+{
+    <span class="cm">// ═══════════ Step 1: 目标决议 ═══════════</span>
+    <span class="cm">// 优先级：context.Target > context.TriggerSource > ParentEntity</span>
+    <span class="kw">var</span> target = context.Target ?? context.TriggerSource ?? trigger.ParentEntity;
+
+    <span class="cm">// ═══════════ Step 2: 状态检查（如果有 TriggerStateCheckComponent）═══════════</span>
+    <span class="kw">var</span> stateCheckComp = trigger.<span class="fn">GetComponent</span>&lt;<span class="tp">TriggerStateCheckComponent</span>&gt;();
+    <span class="kw">if</span> (stateCheckComp != <span class="kw">null</span>)
+    {
+        <span class="kw">var</span> passed = <span class="tp">TriggerStateCheckSystem</span>.<span class="fn">CheckTargetState</span>(
+            stateCheckComp, target <span class="kw">as</span> <span class="tp">CombatEntity</span>);
+
+        <span class="kw">if</span> (!passed)
+        {
+            <span class="cm">// 条件未满足，中止触发</span>
+            <span class="kw">return</span>;
+        }
+    }
+
+    <span class="cm">// ═══════════ Step 3: 遍历所有关联 Effect，创建 EffectAssignAction ═══════════</span>
+    <span class="kw">foreach</span> (<span class="kw">var</span> effect <span class="kw">in</span> trigger.TriggerEffects)
+    {
+        <span class="cm">// 跳过未启用的 Effect</span>
+        <span class="kw">if</span> (!effect.Enable) <span class="kw">continue</span>;
+
+        <span class="cm">// 创建 EffectAssignAction — 将 Effect 应用到目标</span>
+        <span class="kw">var</span> assignAction = trigger.OwnerEntity.<span class="fn">AddChild</span>&lt;<span class="tp">EffectAssignAction</span>&gt;(x =>
+        {
+            x.AbilityEffect = effect;
+            x.Target = target <span class="kw">as</span> <span class="tp">CombatEntity</span>;
+            x.TriggerContext = context;
+        });
+
+        <span class="cm">// 执行 Action — 这会调用 AssignActionSystem.Execute</span>
+        <span class="tp">AssignActionSystem</span>.<span class="fn">Execute</span>(assignAction);
+    }
+}
+</pre>
+
+<div class="section-label">TriggerContext 数据结构</div>
+<pre class="code"><span class="file-tag">TriggerContext.cs</span>
+<span class="kw">public class</span> <span class="tp">TriggerContext</span>
+{
+    <span class="kw">public</span> <span class="tp">EcsEntity</span> <span class="fn">Target</span>;          <span class="cm">// 明确指定的目标</span>
+    <span class="kw">public</span> <span class="tp">EcsEntity</span> <span class="fn">TriggerSource</span>;   <span class="cm">// 触发源（如攻击者）</span>
+    <span class="kw">public</span> <span class="tp">Action</span> <span class="fn">ActionData</span>;         <span class="cm">// 触发时的行动数据（可选）</span>
+}
+</pre>
+
+<div class="callout warn">
+  <div class="callout-title">目标决议的优先级逻辑</div>
+  <code>context.Target ?? context.TriggerSource ?? trigger.ParentEntity</code><br><br>
+  <strong>场景解读：</strong><br>
+  • <strong>context.Target 有值：</strong>明确目标（如 Execution 时间轴指定的目标）<br>
+  • <strong>只有 TriggerSource：</strong>反击类效果，攻击者自身就是效果目标（如反弹伤害给攻击者）<br>
+  • <strong>都没有：</strong>自身效果，目标是 Buff 持有者（如每秒回血）<br><br>
+  这三行代码消除了大量的条件分支。不需要 <code>if (isReflect) ... else if (isSelfBuff) ... else ...</code> 的丑陋结构。
+</div>
+
+<div class="callout good">
+  <div class="callout-title">设计洞察 — OnTrigger 是唯一出口</div>
+  所有触发模式（Instant/Action/Condition）最终都调用同一个 <code>OnTrigger</code>。这意味着：<br>
+  • 状态检查逻辑只写一次<br>
+  • Effect 分发逻辑只写一次<br>
+  • 新增触发模式只需要在 Enable 中添加新的观察组件，不需要改 OnTrigger<br><br>
+  这是经典的<strong>漏斗模式</strong>：多个入口，一个出口。
+</div>
+
+<!-- ===== 5. BehaviourObserveSystem ===== -->
+<h2 id="behaviour-observe"><span class="num">6.5</span> BehaviourObserveSystem — 行为事件监听</h2>
+
+<p>BehaviourObserveComponent 监听 CombatEntity 上的 ActionPoint 事件。当指定的行为事件发生时（如受到伤害），回调触发 OnTrigger。</p>
+
+<pre class="code"><span class="file-tag">BehaviourObserveSystem.cs — 完整源码</span>
+<span class="kw">public class</span> <span class="tp">BehaviourObserveSystem</span>
+    : <span class="tp">AComponentSystem</span>&lt;<span class="tp">AbilityTrigger</span>, <span class="tp">BehaviourObserveComponent</span>&gt;,
+      <span class="tp">IAwake</span>&lt;<span class="tp">AbilityTrigger</span>, <span class="tp">BehaviourObserveComponent</span>&gt;,
+      <span class="tp">IDestroy</span>&lt;<span class="tp">AbilityTrigger</span>, <span class="tp">BehaviourObserveComponent</span>&gt;
+{
+    <span class="cm">// ═══════════ 组件创建时 — 订阅事件 ═══════════</span>
+    <span class="kw">public void</span> <span class="fn">Awake</span>(<span class="tp">AbilityTrigger</span> entity, <span class="tp">BehaviourObserveComponent</span> component)
+    {
+        <span class="cm">// 解析 ActionPoint 类型（如 "PostReceiveDamage" → ActionPointType 枚举）</span>
+        <span class="kw">var</span> actionPointType = (<span class="tp">ActionPointType</span>)Enum.Parse(
+            <span class="kw">typeof</span>(<span class="tp">ActionPointType</span>), component.ActionPointType);
+
+        <span class="cm">// 获取目标实体的 ActionPoint 组件</span>
+        <span class="kw">var</span> combatEntity = entity.ParentEntity <span class="kw">as</span> <span class="tp">CombatEntity</span>;
+        <span class="kw">var</span> actionPoint = combatEntity.<span class="fn">GetComponent</span>&lt;<span class="tp">ActionPointComponent</span>&gt;();
+
+        <span class="cm">// 订阅指定的行为事件</span>
+        <span class="hl">component.Callback = (triggerContext) =></span>
+        <span class="hl">{</span>
+        <span class="hl">    <span class="tp">AbilityTriggerSystem</span>.<span class="fn">OnTrigger</span>(entity, triggerContext);</span>
+        <span class="hl">};</span>
+
+        actionPoint.<span class="fn">AddListener</span>(actionPointType, component.Callback);
+        component.ActionPoint = actionPoint;
+        component.ParsedActionPointType = actionPointType;
+    }
+
+    <span class="cm">// ═══════════ 组件销毁时 — 取消订阅 ═══════════</span>
+    <span class="kw">public void</span> <span class="fn">Destroy</span>(<span class="tp">AbilityTrigger</span> entity, <span class="tp">BehaviourObserveComponent</span> component)
+    {
+        <span class="cm">// 从 ActionPoint 中移除监听</span>
+        component.ActionPoint?.<span class="fn">RemoveListener</span>(
+            component.ParsedActionPointType, component.Callback);
+        component.Callback = <span class="kw">null</span>;
+        component.ActionPoint = <span class="kw">null</span>;
+    }
+}
+</pre>
+
+<div class="section-label">BehaviourObserveComponent 数据</div>
+<pre class="code"><span class="file-tag">BehaviourObserveComponent.cs</span>
+<span class="kw">public class</span> <span class="tp">BehaviourObserveComponent</span> : <span class="tp">EcsComponent</span>
+{
+    <span class="kw">public string</span> <span class="fn">ActionPointType</span>;                          <span class="cm">// 配置字符串</span>
+    <span class="kw">public</span> <span class="tp">ActionPointType</span> <span class="fn">ParsedActionPointType</span>;           <span class="cm">// 解析后的枚举</span>
+    <span class="kw">public</span> <span class="tp">ActionPointComponent</span> <span class="fn">ActionPoint</span>;                <span class="cm">// 监听的 ActionPoint 引用</span>
+    <span class="kw">public</span> <span class="tp">Action</span>&lt;<span class="tp">TriggerContext</span>&gt; <span class="fn">Callback</span>;                <span class="cm">// 回调引用（用于取消订阅）</span>
+}
+</pre>
+
+<div class="callout">
+  <div class="callout-title">ActionPoint 机制</div>
+  ActionPoint 是 CombatEntity 上的事件广播系统。每种行为事件（攻击前、攻击后、受伤前、受伤后、治疗、死亡等）都有一个对应的 ActionPoint 槽位。<br><br>
+  当 DamageAction 执行完毕后，会通过 <code>actionPoint.TriggerPoint(ActionPointType.PostReceiveDamage, context)</code> 广播事件。所有订阅了该 ActionPoint 的 BehaviourObserveComponent 都会收到通知。
+</div>
+
+<div class="section-label">常用 ActionPointType 枚举</div>
+<table class="data">
+  <thead><tr><th>ActionPointType</th><th>触发时机</th><th>典型用途</th></tr></thead>
+  <tbody>
+    <tr><td><code>PreCauseDamage</code></td><td>造成伤害前</td><td>伤害加成/修改</td></tr>
+    <tr><td><code>PostCauseDamage</code></td><td>造成伤害后</td><td>吸血/击杀奖励</td></tr>
+    <tr><td><code>PreReceiveDamage</code></td><td>受到伤害前</td><td>减伤/格挡</td></tr>
+    <tr><td><code>PostReceiveDamage</code></td><td>受到伤害后</td><td>反弹/触发被动</td></tr>
+    <tr><td><code>PreGiveAttack</code></td><td>发起攻击前</td><td>攻速检查</td></tr>
+    <tr><td><code>PostGiveAttack</code></td><td>攻击完成后</td><td>攻击后效果</td></tr>
+    <tr><td><code>PostReceiveCure</code></td><td>受到治疗后</td><td>治疗加成</td></tr>
+    <tr><td><code>PostKill</code></td><td>击杀目标后</td><td>击杀奖励/重置 CD</td></tr>
+  </tbody>
+</table>
+
+<!-- ===== 6. TimeStateObserveSystem ===== -->
+<h2 id="time-state-observe"><span class="num">6.6</span> TimeStateObserveSystem — 时间状态监听</h2>
+
+<p>TimeStateObserveComponent 用计时器驱动触发。支持两种模式：周期性触发（每 N 秒一次）和条件触发（N 秒内未受伤则触发）。</p>
+
+<pre class="code"><span class="file-tag">TimeStateObserveSystem.cs — 完整源码</span>
+<span class="kw">public class</span> <span class="tp">TimeStateObserveSystem</span>
+    : <span class="tp">AComponentSystem</span>&lt;<span class="tp">AbilityTrigger</span>, <span class="tp">TimeStateObserveComponent</span>&gt;,
+      <span class="tp">IAwake</span>&lt;<span class="tp">AbilityTrigger</span>, <span class="tp">TimeStateObserveComponent</span>&gt;,
+      <span class="tp">IUpdate</span>&lt;<span class="tp">AbilityTrigger</span>, <span class="tp">TimeStateObserveComponent</span>&gt;,
+      <span class="tp">IDestroy</span>&lt;<span class="tp">AbilityTrigger</span>, <span class="tp">TimeStateObserveComponent</span>&gt;
+{
+    <span class="cm">// ═══════════ 初始化 — 解析计时器类型 ═══════════</span>
+    <span class="kw">public void</span> <span class="fn">Awake</span>(<span class="tp">AbilityTrigger</span> entity, <span class="tp">TimeStateObserveComponent</span> component)
+    {
+        <span class="cm">// 解析条件类型</span>
+        component.ConditionType = (<span class="tp">TimeStateConditionType</span>)Enum.Parse(
+            <span class="kw">typeof</span>(<span class="tp">TimeStateConditionType</span>), component.ConditionParam);
+
+        <span class="cm">// 解析时间参数</span>
+        component.IntervalTime = <span class="kw">float</span>.Parse(component.ConditionParamValue);
+        component.Timer = <span class="nm">0f</span>;
+        component.IsListening = <span class="kw">false</span>;
+
+        <span class="cm">// 如果是 "N秒内未受伤" 模式，需要监听受伤事件来重置计时器</span>
+        <span class="kw">if</span> (component.ConditionType == <span class="tp">TimeStateConditionType</span>.<span class="fn">WhenInTimeNoDamage</span>)
+        {
+            <span class="kw">var</span> combatEntity = entity.ParentEntity <span class="kw">as</span> <span class="tp">CombatEntity</span>;
+            <span class="kw">var</span> actionPoint = combatEntity.<span class="fn">GetComponent</span>&lt;<span class="tp">ActionPointComponent</span>&gt;();
+
+            component.DamageCallback = (ctx) => <span class="fn">WhenReceiveDamage</span>(entity, component);
+            actionPoint.<span class="fn">AddListener</span>(<span class="tp">ActionPointType</span>.PostReceiveDamage,
+                component.DamageCallback);
+            component.ActionPoint = actionPoint;
+        }
+
+        <span class="cm">// 启动监听</span>
+        <span class="fn">StartListen</span>(entity, component);
+    }
+
+    <span class="cm">// ═══════════ 开始监听 ═══════════</span>
+    <span class="kw">private static void</span> <span class="fn">StartListen</span>(<span class="tp">AbilityTrigger</span> entity, <span class="tp">TimeStateObserveComponent</span> component)
+    {
+        component.Timer = <span class="nm">0f</span>;
+        component.IsListening = <span class="kw">true</span>;
+    }
+
+    <span class="cm">// ═══════════ 每帧更新 — 计时器递增 ═══════════</span>
+    <span class="kw">public void</span> <span class="fn">Update</span>(<span class="tp">AbilityTrigger</span> entity, <span class="tp">TimeStateObserveComponent</span> component)
+    {
+        <span class="kw">if</span> (!component.IsListening) <span class="kw">return</span>;
+
+        component.Timer += <span class="tp">Time</span>.deltaTime;
+
+        <span class="kw">if</span> (component.Timer >= component.IntervalTime)
+        {
+            <span class="fn">OnTimeState</span>(entity, component);
+        }
+    }
+
+    <span class="cm">// ═══════════ 时间到达 — 触发逻辑 ═══════════</span>
+    <span class="kw">private static void</span> <span class="fn">OnTimeState</span>(<span class="tp">AbilityTrigger</span> entity, <span class="tp">TimeStateObserveComponent</span> component)
+    {
+        <span class="kw">switch</span> (component.ConditionType)
+        {
+            <span class="cm">// 周期触发：重置计时器，继续循环</span>
+            <span class="kw">case</span> <span class="tp">TimeStateConditionType</span>.<span class="fn">WhenIntervalTime</span>:
+                component.Timer = <span class="nm">0f</span>;  <span class="cm">// 重置，下个周期继续</span>
+                <span class="tp">AbilityTriggerSystem</span>.<span class="fn">OnTrigger</span>(entity,
+                    <span class="kw">new</span> <span class="tp">TriggerContext</span> { Target = entity.ParentEntity });
+                <span class="kw">break</span>;
+
+            <span class="cm">// 一次性触发：停止监听</span>
+            <span class="kw">case</span> <span class="tp">TimeStateConditionType</span>.<span class="fn">WhenInTimeNoDamage</span>:
+                component.IsListening = <span class="kw">false</span>;  <span class="cm">// 触发后停止</span>
+                <span class="tp">AbilityTriggerSystem</span>.<span class="fn">OnTrigger</span>(entity,
+                    <span class="kw">new</span> <span class="tp">TriggerContext</span> { Target = entity.ParentEntity });
+                <span class="kw">break</span>;
+        }
+    }
+
+    <span class="cm">// ═══════════ 受到伤害时 — 重置计时器 ═══════════</span>
+    <span class="kw">private static void</span> <span class="fn">WhenReceiveDamage</span>(<span class="tp">AbilityTrigger</span> entity, <span class="tp">TimeStateObserveComponent</span> component)
+    {
+        <span class="cm">// 只有 WhenInTimeNoDamage 模式才需要重置</span>
+        <span class="kw">if</span> (component.ConditionType == <span class="tp">TimeStateConditionType</span>.<span class="fn">WhenInTimeNoDamage</span>)
+        {
+            <span class="cm">// 重置计时器 — 重新开始计时</span>
+            component.Timer = <span class="nm">0f</span>;
+            component.IsListening = <span class="kw">true</span>;  <span class="cm">// 如果之前已触发过，重新启动</span>
+        }
+    }
+
+    <span class="cm">// ═══════════ 销毁时清理 ═══════════</span>
+    <span class="kw">public void</span> <span class="fn">Destroy</span>(<span class="tp">AbilityTrigger</span> entity, <span class="tp">TimeStateObserveComponent</span> component)
+    {
+        component.IsListening = <span class="kw">false</span>;
+
+        <span class="kw">if</span> (component.DamageCallback != <span class="kw">null</span>)
+        {
+            component.ActionPoint?.<span class="fn">RemoveListener</span>(
+                <span class="tp">ActionPointType</span>.PostReceiveDamage, component.DamageCallback);
+            component.DamageCallback = <span class="kw">null</span>;
+        }
+    }
+}
+</pre>
+
+<div class="section-label">TimeStateObserveComponent 数据</div>
+<pre class="code"><span class="file-tag">TimeStateObserveComponent.cs</span>
+<span class="kw">public class</span> <span class="tp">TimeStateObserveComponent</span> : <span class="tp">EcsComponent</span>
+{
+    <span class="kw">public string</span> <span class="fn">ConditionParam</span>;                     <span class="cm">// 原始配置字符串</span>
+    <span class="kw">public string</span> <span class="fn">ConditionParamValue</span>;                <span class="cm">// 时间值字符串</span>
+    <span class="kw">public</span> <span class="tp">TimeStateConditionType</span> <span class="fn">ConditionType</span>;     <span class="cm">// 解析后的类型</span>
+    <span class="kw">public float</span> <span class="fn">IntervalTime</span>;                        <span class="cm">// 间隔/阈值时间</span>
+    <span class="kw">public float</span> <span class="fn">Timer</span>;                               <span class="cm">// 当前计时</span>
+    <span class="kw">public bool</span> <span class="fn">IsListening</span>;                          <span class="cm">// 是否正在监听</span>
+    <span class="kw">public</span> <span class="tp">Action</span>&lt;<span class="tp">TriggerContext</span>&gt; <span class="fn">DamageCallback</span>;   <span class="cm">// 受伤回调引用</span>
+    <span class="kw">public</span> <span class="tp">ActionPointComponent</span> <span class="fn">ActionPoint</span>;         <span class="cm">// ActionPoint 引用</span>
+}
+</pre>
+
+<div class="section-label">TimeStateConditionType 枚举</div>
+<table class="data">
+  <thead><tr><th>枚举值</th><th>行为</th><th>计时器逻辑</th><th>典型场景</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>WhenIntervalTime</code></td>
+      <td>周期性重复触发</td>
+      <td>每次到达 IntervalTime 后重置为 0，循环</td>
+      <td>每 2 秒回复 50 HP</td>
+    </tr>
+    <tr>
+      <td><code>WhenInTimeNoDamage</code></td>
+      <td>一段时间未受伤则触发一次</td>
+      <td>受伤时重置为 0；到达 IntervalTime 后停止监听</td>
+      <td>脱战 5 秒后回血</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout good">
+  <div class="callout-title">设计洞察 — 计时器的双重监听</div>
+  <code>WhenInTimeNoDamage</code> 模式同时用了两种机制：<br>
+  • <strong>IUpdate</strong>：每帧推进计时器<br>
+  • <strong>ActionPoint 订阅</strong>：受伤时重置计时器<br><br>
+  这比用一个复杂的状态机清晰得多。每种关注点（时间推进 vs 外部中断）由不同机制独立处理，互不干扰。
+</div>
+
+<!-- ===== 7. TriggerStateCheckSystem ===== -->
+<h2 id="state-check"><span class="num">6.7</span> TriggerStateCheckSystem — 状态条件检查</h2>
+
+<p>TriggerStateCheckSystem 在 OnTrigger 中被调用，负责判断「当前条件是否满足」。支持多条件 AND 逻辑和条件取反。</p>
+
+<pre class="code"><span class="file-tag">TriggerStateCheckSystem.cs — 完整源码</span>
+<span class="kw">public class</span> <span class="tp">TriggerStateCheckSystem</span>
+    : <span class="tp">AComponentSystem</span>&lt;<span class="tp">AbilityTrigger</span>, <span class="tp">TriggerStateCheckComponent</span>&gt;,
+      <span class="tp">IAwake</span>&lt;<span class="tp">AbilityTrigger</span>, <span class="tp">TriggerStateCheckComponent</span>&gt;
+{
+    <span class="cm">// ═══════════ 初始化 — 解析条件字符串，加载检查类 ═══════════</span>
+    <span class="kw">public void</span> <span class="fn">Awake</span>(<span class="tp">AbilityTrigger</span> entity, <span class="tp">TriggerStateCheckComponent</span> component)
+    {
+        component.StateChecks = <span class="kw">new</span> <span class="tp">List</span>&lt;<span class="tp">StateCheckEntry</span>&gt;();
+
+        <span class="kw">foreach</span> (<span class="kw">var</span> config <span class="kw">in</span> component.StateCheckList)
+        {
+            <span class="kw">var</span> entry = <span class="kw">new</span> <span class="tp">StateCheckEntry</span>();
+            <span class="kw">var</span> checkName = config.StateCheckType;
+
+            <span class="cm">// 解析取反前缀 — "!" 表示条件取反</span>
+            <span class="hl"><span class="kw">if</span> (checkName.StartsWith(<span class="st">"!"</span>))</span>
+            <span class="hl">{</span>
+            <span class="hl">    entry.IsInverted = <span class="kw">true</span>;</span>
+            <span class="hl">    checkName = checkName.Substring(<span class="nm">1</span>);</span>
+            <span class="hl">}</span>
+            <span class="kw">else</span>
+            {
+                entry.IsInverted = <span class="kw">false</span>;
+            }
+
+            <span class="cm">// 动态加载 StateCheck 类</span>
+            <span class="cm">// 约定：类名 = "StateCheck_" + 配置字符串</span>
+            <span class="kw">var</span> typeName = <span class="st">$"EGamePlay.Combat.StateCheck_{checkName}"</span>;
+            <span class="kw">var</span> type = <span class="tp">Type</span>.<span class="fn">GetType</span>(typeName);
+
+            <span class="kw">if</span> (type != <span class="kw">null</span>)
+            {
+                entry.Checker = (<span class="tp">IStateCheck</span>)<span class="tp">Activator</span>.<span class="fn">CreateInstance</span>(type);
+                entry.Param = config.Param;  <span class="cm">// 传递参数（如概率值）</span>
+            }
+            <span class="kw">else</span>
+            {
+                <span class="tp">ConsoleLog</span>.LogError(<span class="st">$"StateCheck type not found: {typeName}"</span>);
+            }
+
+            component.StateChecks.Add(entry);
+        }
+    }
+
+    <span class="cm">// ═══════════ 目标状态检查 — AND 逻辑 ═══════════</span>
+    <span class="kw">public static bool</span> <span class="fn">CheckTargetState</span>(
+        <span class="tp">TriggerStateCheckComponent</span> component,
+        <span class="tp">CombatEntity</span> target)
+    {
+        <span class="kw">foreach</span> (<span class="kw">var</span> entry <span class="kw">in</span> component.StateChecks)
+        {
+            <span class="kw">if</span> (entry.Checker == <span class="kw">null</span>) <span class="kw">continue</span>;
+
+            <span class="cm">// 调用具体的检查实现</span>
+            <span class="kw">var</span> result = entry.Checker.<span class="fn">Check</span>(target, entry.Param);
+
+            <span class="cm">// 如果配置了取反，翻转结果</span>
+            <span class="hl"><span class="kw">if</span> (entry.IsInverted) result = !result;</span>
+
+            <span class="cm">// AND 逻辑 — 任一条件失败则整体失败</span>
+            <span class="kw">if</span> (!result) <span class="kw">return false</span>;
+        }
+
+        <span class="kw">return true</span>;  <span class="cm">// 所有条件通过</span>
+    }
+}
+</pre>
+
+<div class="section-label">支撑数据结构</div>
+<pre class="code"><span class="file-tag">TriggerStateCheckComponent.cs</span>
+<span class="kw">public class</span> <span class="tp">TriggerStateCheckComponent</span> : <span class="tp">EcsComponent</span>
+{
+    <span class="kw">public</span> <span class="tp">List</span>&lt;<span class="tp">StateCheckConfig</span>&gt; <span class="fn">StateCheckList</span>;   <span class="cm">// 原始配置列表</span>
+    <span class="kw">public</span> <span class="tp">List</span>&lt;<span class="tp">StateCheckEntry</span>&gt; <span class="fn">StateChecks</span>;      <span class="cm">// 解析后的检查器列表</span>
+}
+
+<span class="kw">public class</span> <span class="tp">StateCheckEntry</span>
+{
+    <span class="kw">public</span> <span class="tp">IStateCheck</span> <span class="fn">Checker</span>;     <span class="cm">// 检查器实例</span>
+    <span class="kw">public bool</span> <span class="fn">IsInverted</span>;        <span class="cm">// 是否取反</span>
+    <span class="kw">public string</span> <span class="fn">Param</span>;          <span class="cm">// 传递给检查器的参数</span>
+}
+
+<span class="cm">// 检查器接口</span>
+<span class="kw">public interface</span> <span class="tp">IStateCheck</span>
+{
+    <span class="kw">bool</span> <span class="fn">Check</span>(<span class="tp">CombatEntity</span> target, <span class="kw">string</span> param);
+}
+</pre>
+
+<div class="section-label">内置 StateCheck 实现示例</div>
+<pre class="code"><span class="file-tag">StateCheck 实现</span>
+<span class="cm">// 概率检查 — "30" 表示 30% 概率通过</span>
+<span class="kw">public class</span> <span class="tp">StateCheck_Probability</span> : <span class="tp">IStateCheck</span>
+{
+    <span class="kw">public bool</span> <span class="fn">Check</span>(<span class="tp">CombatEntity</span> target, <span class="kw">string</span> param)
+    {
+        <span class="kw">var</span> probability = <span class="kw">float</span>.Parse(param);  <span class="cm">// param = "30"</span>
+        <span class="kw">return</span> <span class="tp">Random</span>.Range(<span class="nm">0</span>, <span class="nm">100</span>) < probability;
+    }
+}
+
+<span class="cm">// HP 百分比检查 — "50" 表示 HP 低于 50% 时通过</span>
+<span class="kw">public class</span> <span class="tp">StateCheck_HPLowerPercent</span> : <span class="tp">IStateCheck</span>
+{
+    <span class="kw">public bool</span> <span class="fn">Check</span>(<span class="tp">CombatEntity</span> target, <span class="kw">string</span> param)
+    {
+        <span class="kw">var</span> percent = <span class="kw">float</span>.Parse(param);
+        <span class="kw">var</span> attr = target.<span class="fn">GetComponent</span>&lt;<span class="tp">AttributeComponent</span>&gt;();
+        <span class="kw">var</span> hpRatio = attr.HealthPoint.Value / attr.HealthPointMax.Value * <span class="nm">100</span>;
+        <span class="kw">return</span> hpRatio < percent;
+    }
+}
+
+<span class="cm">// Buff 检查 — 目标是否持有指定 Buff</span>
+<span class="kw">public class</span> <span class="tp">StateCheck_HasBuff</span> : <span class="tp">IStateCheck</span>
+{
+    <span class="kw">public bool</span> <span class="fn">Check</span>(<span class="tp">CombatEntity</span> target, <span class="kw">string</span> param)
+    {
+        <span class="kw">var</span> buffId = <span class="kw">int</span>.Parse(param);
+        <span class="kw">return</span> target.<span class="fn">HasBuff</span>(buffId);
+    }
+}
+</pre>
+
+<div class="callout good">
+  <div class="callout-title">设计洞察 — 取反前缀的优雅性</div>
+  不需要为每个 StateCheck 写两个版本（如 HasBuff / NotHasBuff）。配置中写 <code>"!HasBuff"</code> 就是取反。<br><br>
+  这是 Linus 说的「好品味」— 用一个通用机制（前缀解析 + 结果取反）消除了一半的 StateCheck 类。系统的表达力翻倍，代码量不变。
+</div>
+
+<div class="callout warn">
+  <div class="callout-title">Type.GetType 的运行时开销</div>
+  <code>Type.GetType</code> + <code>Activator.CreateInstance</code> 只在 Awake 时执行一次（Trigger 创建时），不会每帧调用。检查器实例被缓存在 <code>StateCheckEntry.Checker</code> 中。<br><br>
+  如果未来 StateCheck 类型数量增长到需要字典缓存的程度，可以在 EcsNode 启动时预扫描所有 IStateCheck 实现类并建立 name→type 映射。当前规模下不需要。
+</div>
+
+<!-- ===== 8. Composition Example ===== -->
+<h2 id="composition"><span class="num">6.8</span> 组合示例 — 被动反伤</h2>
+
+<p>展示如何用 Trigger + StateCheck + Effect 组合出一个完整的被动效果：<strong>「受到攻击时，30% 概率反弹 100 伤害」</strong>。</p>
+
+<div class="section-label">配置数据</div>
+<pre class="code"><span class="file-tag">被动反伤 — 配置 ScriptableObject</span>
+<span class="cm">// Ability 配置</span>
+AbilityConfig:
+  Name: "荆棘之甲"
+  AbilityType: Buff
+  Duration: -1  <span class="cm">// 永久</span>
+
+  <span class="cm">// Effect 列表</span>
+  Effects:
+    [0]: DamageEffect
+         DamageValueFormula: "100"   <span class="cm">// 固定 100 伤害</span>
+         DamageTarget: TriggerSource <span class="cm">// 伤害目标 = 触发源（攻击者）</span>
+
+  <span class="cm">// Trigger 配置</span>
+  Triggers:
+    [0]: TriggerConfig
+         AutoTriggerType: Action     <span class="cm">// 行为事件触发</span>
+         ActionPointType: "PostReceiveDamage"  <span class="cm">// 受伤后触发</span>
+         TriggerEffectIds: [0]       <span class="cm">// 触发 Effect[0]</span>
+         StateCheckList:
+           - StateCheckType: "Probability"
+             Param: "30"             <span class="cm">// 30% 概率</span>
+</pre>
+
+<div class="section-label">运行时执行流程</div>
+<div class="flow flow-v">
+  <div class="flow-row">
+    <div class="flow-node blue">敌人攻击持有荆棘之甲的角色</div>
+    <span class="flow-label">DamageAction 执行完毕</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node purple">ActionPoint.TriggerPoint(PostReceiveDamage, ctx)</div>
+    <span class="flow-label">ctx.TriggerSource = 攻击者</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node cyan">BehaviourObserveSystem.Callback(ctx)</div>
+    <span class="flow-label">荆棘之甲的 Trigger 收到通知</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node green">AbilityTriggerSystem.OnTrigger(trigger, ctx)</div>
+    <span class="flow-label">进入核心触发流程</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node warn">TriggerStateCheckSystem.CheckTargetState</div>
+    <span class="flow-label">StateCheck_Probability.Check("30") → Random &lt; 30?</span>
+  </div>
+  <div class="flow-arrow-d">↓ 通过(30%概率)</div>
+  <div class="flow-row">
+    <div class="flow-node red">创建 EffectAssignAction → AssignActionSystem.Execute</div>
+    <span class="flow-label">对攻击者(TriggerSource)造成 100 伤害</span>
+  </div>
+</div>
+
+<div class="section-label">对应代码路径</div>
+<pre class="code"><span class="file-tag">执行路径跟踪</span>
+<span class="cm">// 1. DamageAction 完成后广播 ActionPoint</span>
+actionPoint.<span class="fn">TriggerPoint</span>(<span class="tp">ActionPointType</span>.PostReceiveDamage,
+    <span class="kw">new</span> <span class="tp">TriggerContext</span> { TriggerSource = attacker });
+
+<span class="cm">// 2. BehaviourObserveComponent 的回调被调用</span>
+component.Callback(triggerContext);
+<span class="cm">// → AbilityTriggerSystem.OnTrigger(荆棘Trigger, ctx)</span>
+
+<span class="cm">// 3. OnTrigger 内部：</span>
+<span class="cm">//    target = ctx.Target ?? ctx.TriggerSource ?? ParentEntity</span>
+<span class="cm">//    = null ?? attacker ?? self</span>
+<span class="cm">//    = attacker  ← 攻击者成为效果目标！</span>
+
+<span class="cm">// 4. StateCheck 执行：</span>
+<span class="cm">//    StateCheck_Probability.Check(attacker, "30") → Random(0,100) < 30</span>
+<span class="cm">//    假设返回 true（命中 30% 概率）</span>
+
+<span class="cm">// 5. 创建 EffectAssignAction：</span>
+<span class="cm">//    assignAction.AbilityEffect = DamageEffect(100)</span>
+<span class="cm">//    assignAction.Target = attacker</span>
+<span class="cm">//    → 攻击者受到 100 伤害</span>
+</pre>
+
+<div class="callout good">
+  <div class="callout-title">组合的威力</div>
+  整个「30% 概率反弹 100 伤害」的逻辑，<strong>零代码</strong>。全部通过配置组合实现：<br><br>
+  • <strong>Trigger (Action + PostReceiveDamage)</strong>：决定何时触发<br>
+  • <strong>StateCheck (Probability + "30")</strong>：决定是否通过<br>
+  • <strong>Effect (DamageEffect + "100")</strong>：决定做什么<br>
+  • <strong>目标决议 (TriggerSource)</strong>：决定对谁做<br><br>
+  新增「50% 概率反弹 200 伤害并附带减速」只需要修改配置参数 + 加一个 AddBuff Effect。系统代码不动。
+</div>
+
+<div class="card-grid">
+  <div class="card">
+    <div class="card-title">更多组合示例</div>
+    <div class="card-body">
+      <strong>每 3 秒回 50 HP：</strong><br>
+      Trigger(Condition + WhenIntervalTime + "3") → Effect(CureEffect + "50")<br><br>
+      <strong>HP 低于 30% 时攻击力 +50%：</strong><br>
+      Trigger(Condition + WhenIntervalTime + "0.5") + StateCheck(HPLowerPercent + "30") → Effect(AttributeModify + PctAdd + Attack + "50")
+    </div>
+  </div>
+  <div class="card warn">
+    <div class="card-title">已知局限</div>
+    <div class="card-body">
+      • StateCheck 之间只支持 AND 逻辑，不支持 OR<br>
+      • 条件参数只支持字符串，复杂条件需要自定义 StateCheck 类<br>
+      • Type.GetType 依赖完整的命名空间路径，拼写错误只在运行时暴露<br>
+      • 无概率保底机制（伪随机）
+    </div>
+  </div>
+</div>
+
+<div class="callout good">
+  <div class="callout-title">验收标准 — 读完本章后你应该能回答</div>
+  1. AbilityTrigger 的三种 AutoTriggerType 分别对应什么监听机制？<br>
+  2. OnTrigger 中 <code>context.Target ?? context.TriggerSource ?? ParentEntity</code> 的三个分支分别对应什么游戏场景？<br>
+  3. TriggerStateCheckSystem 如何支持条件取反？为什么不用每个条件写两个类？<br>
+  4. WhenIntervalTime 和 WhenInTimeNoDamage 的计时器行为有什么本质区别？<br>
+  5. 如何配置一个「HP 低于 30% 时每 2 秒回血 100」的被动？需要哪些组件？
+</div>
+
+<!-- Chapter Navigation -->
+<div class="ch-nav">
+  <a href="ch05-effect.html">
+    <span class="dir">← 上一章</span>
+    Ch05 效果系统
+  </a>
+  <a href="ch07-execution.html">
+    <span class="dir">下一章 →</span>
+    Ch07 执行时间轴
+  </a>
+</div>
+
+</main>
+</div>
+</body>
+</html>

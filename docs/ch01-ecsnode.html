@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ch01 — EcsNode ECS 框架底座 | EGamePlay</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&family=Noto+Sans+SC:wght@400;600;700;900&family=JetBrains+Mono:wght@400;600&family=Playfair+Display:wght@900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="doc-layout">
+
+<!-- Sidebar -->
+<nav class="doc-sidebar">
+  <div class="nav-brand"><a href="index.html">EGamePlay</a></div>
+  <div class="nav-section">Chapters</div>
+  <ul class="nav-list">
+    <li><a class="active" href="ch01-ecsnode.html"><span class="ch-num">01</span> EcsNode 框架底座</a></li>
+    <li><a href="ch02-numeric.html"><span class="ch-num">02</span> 数值系统</a></li>
+    <li><a href="ch03-combat-entity.html"><span class="ch-num">03</span> 战斗实体</a></li>
+    <li><a href="ch04-ability.html"><span class="ch-num">04</span> 技能/Buff 核心</a></li>
+    <li><a href="ch05-effect.html"><span class="ch-num">05</span> 效果系统</a></li>
+    <li><a href="ch06-trigger.html"><span class="ch-num">06</span> 触发系统</a></li>
+    <li><a href="ch07-execution.html"><span class="ch-num">07</span> 执行时间轴</a></li>
+    <li><a href="ch08-action.html"><span class="ch-num">08</span> 行动系统</a></li>
+    <li><a href="ch09-config.html"><span class="ch-num">09</span> 配置管线</a></li>
+  </ul>
+  <div class="nav-section" style="margin-top:24px">本章目录</div>
+  <ul class="nav-list">
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#entity">EcsEntity 实体</a></li>
+    <li><a href="#component">EcsComponent 组件</a></li>
+    <li><a href="#system">System 系统</a></li>
+    <li><a href="#drives">DriveType 生命周期</a></li>
+    <li><a href="#ecsnode">EcsNode 调度器</a></li>
+    <li><a href="#eventbus">EventBus 事件总线</a></li>
+    <li><a href="#entitystate">EntityState 安全引用</a></li>
+    <li><a href="#summary">设计总结</a></li>
+  </ul>
+</nav>
+
+<!-- Main Content -->
+<main class="doc-main">
+<div class="ch-header">
+  <div class="ch-kicker">Chapter 01</div>
+  <h1>EcsNode — <span class="accent">ECS 框架底座</span></h1>
+  <p class="ch-subtitle">理解 EGamePlay 一切运行机制的基础。EcsNode 是一个面向游戏业务的 OOP-ECS 框架，不追求 DOTS 级性能，而是追求代码可读性和灵活的业务建模能力。</p>
+</div>
+
+<!-- ===== 1. Overview ===== -->
+<h2 id="overview"><span class="num">1.1</span> 概述与定位</h2>
+
+<div class="callout">
+  <div class="callout-title">核心定位</div>
+  EcsNode 不是 Unity DOTS/ECS。它是一个 <strong>OOP 风格的轻量 ECS 框架</strong>，核心特点：<br>
+  • Entity 有类型（继承 <code>EcsEntity</code>），不是纯 ID<br>
+  • System 通过反射自动注册，无需手动绑定<br>
+  • 数据和逻辑分离：Model 层只存数据，System 层执行逻辑<br>
+  • 支持 Entity 父子层级，形成所有权树
+</div>
+
+<div class="section-label">文件位置</div>
+<pre class="code"><span class="file-tag">目录结构</span>
+Assets/App.ThirdParty/EcsNode/
+├── EcsNode.cs            <span class="cm">// 核心调度器（529行）</span>
+├── EcsEntity.cs          <span class="cm">// 实体基类（268行）</span>
+├── EcsComponent.cs       <span class="cm">// 组件基类（94行）</span>
+├── EcsObject.cs          <span class="cm">// 抽象公共基类（37行）</span>
+├── EntityState.cs        <span class="cm">// 安全引用包装（65行）</span>
+├── EventBus.cs           <span class="cm">// 事件总线（109行）</span>
+├── ConsoleLog.cs         <span class="cm">// 日志工具</span>
+├── EcsSystem/
+│   ├── IEcsSystem.cs     <span class="cm">// System 接口定义</span>
+│   ├── AEntitySystem.cs  <span class="cm">// Entity System 基类</span>
+│   ├── AComponentSystem.cs <span class="cm">// Component System 基类</span>
+│   └── DriveTypes/       <span class="cm">// 所有生命周期接口</span>
+│       ├── IAwake.cs
+│       ├── IUpdate.cs
+│       ├── IEnable.cs
+│       ├── IInit.cs
+│       ├── IDestroy.cs
+│       ├── IOnChange.cs
+│       ├── IOnAddComponent.cs
+│       ├── IOnRemoveComponent.cs
+│       └── IDispatch.cs
+└── SystemFilterAttribute.cs <span class="cm">// System 过滤器</span>
+</pre>
+
+<div class="section-label">核心设计思想</div>
+<div class="card-grid">
+  <div class="card">
+    <div class="card-title">数据与逻辑分离</div>
+    <div class="card-body">Entity/Component 只存数据（Model 层），System 包含所有逻辑。同一份数据可以有不同的 System 处理（如 Server 和 Client 用不同的 DamageSystem）。</div>
+  </div>
+  <div class="card green">
+    <div class="card-title">反射自动注册</div>
+    <div class="card-body">System 只需继承 <code>AEntitySystem&lt;T&gt;</code> 并实现对应接口，EcsNode 启动时自动扫描注册。零配置。</div>
+  </div>
+  <div class="card warn">
+    <div class="card-title">层级所有权</div>
+    <div class="card-body">Entity 通过 Parent/Children 形成树状结构。父 Entity 销毁时，子树自动清理。CombatEntity → Ability → Effect 就是这样的层级。</div>
+  </div>
+</div>
+
+<!-- ===== 2. EcsEntity ===== -->
+<h2 id="entity"><span class="num">1.2</span> EcsEntity — 实体基类</h2>
+
+<p>一切战斗实体（CombatEntity、Ability、AbilityEffect、AbilityTrigger、各种 Action）都继承自 EcsEntity。它提供三个核心能力：<strong>身份标识</strong>、<strong>组件容器</strong>、<strong>层级关系</strong>。</p>
+
+<h3>完整类结构</h3>
+<pre class="code"><span class="file-tag">EcsEntity.cs</span>
+<span class="kw">public class</span> <span class="tp">EcsEntity</span> : <span class="tp">EcsObject</span>
+{
+    <span class="cm">// ═══════════ 身份标识 ═══════════</span>
+    <span class="kw">public</span> <span class="tp">long</span> <span class="fn">Id</span> { <span class="kw">get</span>; <span class="kw">set</span>; }          <span class="cm">// 业务 ID（如技能配置表 ID）</span>
+    <span class="kw">public</span> <span class="tp">long</span> <span class="fn">InstanceId</span> { <span class="kw">get</span>; <span class="kw">set</span>; }  <span class="cm">// 运行时唯一实例 ID（由 EcsNode 生成）</span>
+
+    <span class="cm">// ═══════════ 组件容器 ═══════════</span>
+    <span class="kw">public</span> <span class="tp">Dictionary</span>&lt;<span class="tp">Type</span>, <span class="tp">EcsComponent</span>&gt; <span class="fn">Components</span> { <span class="kw">get</span>; }
+        = <span class="kw">new</span> <span class="tp">Dictionary</span>&lt;<span class="tp">Type</span>, <span class="tp">EcsComponent</span>&gt;();
+
+    <span class="cm">// ═══════════ 层级关系 ═══════════</span>
+    <span class="kw">public</span> <span class="tp">EcsEntity</span> <span class="fn">Parent</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+    <span class="kw">public</span> <span class="tp">Dictionary</span>&lt;<span class="tp">long</span>, <span class="tp">EcsEntity</span>&gt; <span class="fn">Id2Children</span> { <span class="kw">get</span>; }
+        = <span class="kw">new</span> <span class="tp">Dictionary</span>&lt;<span class="tp">long</span>, <span class="tp">EcsEntity</span>&gt;();
+
+    <span class="cm">// ═══════════ 启用状态 ═══════════</span>
+    <span class="kw">private bool</span> _enable;
+    <span class="kw">public bool</span> <span class="fn">Enable</span>
+    {
+        <span class="kw">get</span> => _enable;
+        <span class="kw">set</span> {
+            <span class="kw">if</span> (_enable == value) <span class="kw">return</span>;
+            _enable = value;
+            <span class="kw">if</span> (value)
+            {
+                <span class="cm">// 触发 IEnable System</span>
+                EcsNode.Instance.<span class="fn">DriveEntitySystems</span>(<span class="kw">this</span>, <span class="kw">typeof</span>(<span class="tp">IEnable</span>));
+                <span class="cm">// 级联启用所有组件</span>
+                <span class="kw">foreach</span> (<span class="kw">var</span> comp <span class="kw">in</span> Components.Values)
+                    comp.Enable = <span class="kw">true</span>;
+            }
+            <span class="kw">else</span>
+            {
+                <span class="cm">// 触发 IDisable System</span>
+                EcsNode.Instance.<span class="fn">DriveEntitySystems</span>(<span class="kw">this</span>, <span class="kw">typeof</span>(<span class="tp">IDisable</span>));
+                <span class="kw">foreach</span> (<span class="kw">var</span> comp <span class="kw">in</span> Components.Values)
+                    comp.Enable = <span class="kw">false</span>;
+            }
+        }
+    }
+}
+</pre>
+
+<div class="callout good">
+  <div class="callout-title">设计洞察 — Enable 级联</div>
+  Entity 的 Enable 属性设置时会<strong>自动级联到所有挂载的 Component</strong>。当 Ability.Enable = false 时，它身上的 EffectDamageComponent、EffectCureComponent 等全部被禁用。这让 Buff 的「暂停/恢复」变成一行代码。
+</div>
+
+<h3>子实体管理 API</h3>
+<pre class="code"><span class="file-tag">子实体创建与删除</span>
+<span class="cm">// 创建子实体 — 最常用的 API</span>
+<span class="kw">public</span> T <span class="fn">AddChild</span>&lt;T&gt;() <span class="kw">where</span> T : <span class="tp">EcsEntity</span>, <span class="kw">new</span>()
+{
+    <span class="kw">var</span> entity = <span class="kw">new</span> T();
+    entity.Id = EcsNode.Instance.<span class="fn">NewInstanceId</span>();   <span class="cm">// 自动分配唯一 ID</span>
+    entity.InstanceId = entity.Id;
+    entity.Parent = <span class="kw">this</span>;                          <span class="cm">// 设置父子关系</span>
+    Id2Children.Add(entity.Id, entity);
+    EcsNode.Instance.<span class="fn">DriveEntitySystems</span>(entity, <span class="kw">typeof</span>(<span class="tp">IAwake</span>)); <span class="cm">// 触发 IAwake</span>
+    <span class="kw">return</span> entity;
+}
+
+<span class="cm">// 带初始化回调的版本 — 可在 Awake 之前设置属性</span>
+<span class="kw">public</span> T <span class="fn">AddChild</span>&lt;T&gt;(<span class="tp">Action</span>&lt;T&gt; initAction) <span class="kw">where</span> T : <span class="tp">EcsEntity</span>, <span class="kw">new</span>()
+{
+    <span class="kw">var</span> entity = <span class="kw">new</span> T();
+    entity.Id = EcsNode.Instance.NewInstanceId();
+    entity.InstanceId = entity.Id;
+    entity.Parent = <span class="kw">this</span>;
+    Id2Children.Add(entity.Id, entity);
+    <span class="hl">initAction?.Invoke(entity);</span>                    <span class="cm">// ← 在 Awake 前执行初始化</span>
+    EcsNode.Instance.DriveEntitySystems(entity, <span class="kw">typeof</span>(IAwake));
+    <span class="kw">return</span> entity;
+}
+
+<span class="cm">// 使用示例（来自 AbilitySystem.Attach）：</span>
+<span class="kw">var</span> ability = entity.<span class="fn">AddChild</span>&lt;<span class="tp">Ability</span>&gt;(x => x.ConfigObject = configObject);
+<span class="cm">// ↑ ConfigObject 在 Awake 之前就设好了，所以 AbilitySystem.Awake 里能直接用</span>
+
+<span class="cm">// 删除子实体</span>
+<span class="kw">public void</span> <span class="fn">RemoveChild</span>(<span class="tp">EcsEntity</span> child)
+{
+    Id2Children.Remove(child.Id);
+    EcsNode.Instance.<span class="fn">DriveEntitySystems</span>(child, <span class="kw">typeof</span>(<span class="tp">IDestroy</span>)); <span class="cm">// 触发 IDestroy</span>
+    EcsObject.<span class="fn">Destroy</span>(child);  <span class="cm">// 递归销毁子树</span>
+}
+</pre>
+
+<h3>组件管理 API</h3>
+<pre class="code"><span class="file-tag">组件操作</span>
+<span class="cm">// 添加组件</span>
+<span class="kw">public</span> T <span class="fn">AddComponent</span>&lt;T&gt;() <span class="kw">where</span> T : <span class="tp">EcsComponent</span>, <span class="kw">new</span>()
+{
+    <span class="kw">var</span> comp = <span class="kw">new</span> T();
+    comp.Entity = <span class="kw">this</span>;
+    Components[<span class="kw">typeof</span>(T)] = comp;
+    <span class="cm">// 触发 IOnAddComponent System</span>
+    EcsNode.Instance.<span class="fn">DriveComponentSystems</span>(<span class="kw">this</span>, comp, <span class="kw">typeof</span>(<span class="tp">IAwake</span>));
+    <span class="kw">return</span> comp;
+}
+
+<span class="cm">// 带初始化的添加</span>
+<span class="kw">public</span> T <span class="fn">AddComponent</span>&lt;T&gt;(<span class="tp">Action</span>&lt;T&gt; initAction)
+{
+    <span class="kw">var</span> comp = <span class="kw">new</span> T();
+    comp.Entity = <span class="kw">this</span>;
+    Components[<span class="kw">typeof</span>(T)] = comp;
+    <span class="hl">initAction?.Invoke(comp);</span>   <span class="cm">// ← Awake 前设置属性</span>
+    EcsNode.Instance.DriveComponentSystems(<span class="kw">this</span>, comp, <span class="kw">typeof</span>(IAwake));
+    <span class="kw">return</span> comp;
+}
+
+<span class="cm">// 获取组件</span>
+<span class="kw">public</span> T <span class="fn">GetComponent</span>&lt;T&gt;() <span class="kw">where</span> T : <span class="tp">EcsComponent</span>
+{
+    Components.TryGetValue(<span class="kw">typeof</span>(T), <span class="kw">out var</span> comp);
+    <span class="kw">return</span> comp <span class="kw">as</span> T;
+}
+
+<span class="cm">// 获取父节点（向上查找类型）</span>
+<span class="kw">public</span> T <span class="fn">GetParent</span>&lt;T&gt;() <span class="kw">where</span> T : <span class="tp">EcsEntity</span>
+{
+    <span class="kw">return</span> Parent <span class="kw">as</span> T;  <span class="cm">// 直接转型，假设调用者知道父节点类型</span>
+}
+
+<span class="cm">// 变更通知 — 触发 IOnChange System</span>
+<span class="kw">public void</span> <span class="fn">Change</span>&lt;T&gt;(<span class="tp">Action</span>&lt;T&gt; action) <span class="kw">where</span> T : <span class="tp">EcsComponent</span>
+{
+    <span class="kw">var</span> comp = GetComponent&lt;T&gt;();
+    action?.Invoke(comp);
+    EcsNode.Instance.DriveComponentSystems(<span class="kw">this</span>, comp, <span class="kw">typeof</span>(<span class="tp">IOnChange</span>));
+}
+
+<span class="cm">// 事件广播 — 通知所有监听此 Entity 类型的 IDispatch System</span>
+<span class="kw">public void</span> <span class="fn">Dispatch</span>&lt;T&gt;(<span class="tp">Action</span>&lt;T&gt; action) <span class="kw">where</span> T : <span class="tp">EcsComponent</span>
+{
+    <span class="cm">// 向所有注册了 IDispatch 的 System 广播事件</span>
+}
+</pre>
+
+<div class="callout warn">
+  <div class="callout-title">实际使用模式</div>
+  在 EGamePlay 中，最常见的使用模式是：<br>
+  <code>entity.AddChild&lt;Ability&gt;(x => x.ConfigObject = config)</code> — 创建子实体并在 Awake 前注入配置<br>
+  <code>entity.AddComponent&lt;EffectDamageComponent&gt;()</code> — 给 Effect 挂载能力声明<br>
+  <code>entity.GetParent&lt;CombatEntity&gt;()</code> — 从 Effect 向上找到持有者<br>
+  这三个 API 覆盖了 90% 的使用场景。
+</div>
+
+<!-- ===== 3. EcsComponent ===== -->
+<h2 id="component"><span class="num">1.3</span> EcsComponent — 组件基类</h2>
+
+<p>组件是纯数据容器。它绑定到一个 Entity，有自己的 Enable/Disable 状态（受宿主 Entity 级联控制）。</p>
+
+<pre class="code"><span class="file-tag">EcsComponent.cs</span>
+<span class="kw">public interface</span> <span class="tp">IEcsComponent</span> { }
+
+<span class="kw">public class</span> <span class="tp">EcsComponent</span> : <span class="tp">EcsObject</span>, <span class="tp">IEcsComponent</span>
+{
+    <span class="kw">public</span> <span class="tp">EcsEntity</span> <span class="fn">Entity</span> { <span class="kw">get</span>; <span class="kw">set</span>; }   <span class="cm">// 宿主 Entity</span>
+
+    <span class="kw">private bool</span> _enable;
+    <span class="kw">public bool</span> <span class="fn">Enable</span>
+    {
+        <span class="kw">get</span> => _enable;
+        <span class="kw">set</span> {
+            <span class="kw">if</span> (_enable == value) <span class="kw">return</span>;
+            _enable = value;
+            <span class="kw">if</span> (value)
+                EcsNode.Instance.<span class="fn">DriveComponentSystems</span>(Entity, <span class="kw">this</span>, <span class="kw">typeof</span>(<span class="tp">IEnable</span>));
+            <span class="kw">else</span>
+                EcsNode.Instance.<span class="fn">DriveComponentSystems</span>(Entity, <span class="kw">this</span>, <span class="kw">typeof</span>(<span class="tp">IDisable</span>));
+        }
+    }
+}
+
+<span class="cm">// 泛型版本 — 提供类型安全的 Entity 访问</span>
+<span class="kw">public class</span> <span class="tp">EcsComponent</span>&lt;T&gt; : <span class="tp">EcsComponent</span> <span class="kw">where</span> T : <span class="tp">EcsEntity</span>
+{
+    <span class="kw">public new</span> T <span class="fn">Entity</span>
+    {
+        <span class="kw">get</span> => <span class="kw">base</span>.Entity <span class="kw">as</span> T;
+        <span class="kw">set</span> => <span class="kw">base</span>.Entity = value;
+    }
+}
+</pre>
+
+<div class="callout good">
+  <div class="callout-title">实际组件示例</div>
+  EGamePlay 中的组件都很简单，只有属性声明：<br><br>
+  <code>EffectDamageComponent</code> → 持有 <code>DamageEffect</code> 配置引用 + <code>DamageValueFormula</code> 字符串<br>
+  <code>EffectAddBuffComponent</code> → 持有 <code>AddStatusEffect</code> 配置 + <code>Duration</code> 浮点数<br>
+  <code>AbilityDurationComponent</code> → 持有 <code>GameTimer</code> + <code>Duration</code><br><br>
+  组件<strong>永远不包含逻辑方法</strong>，所有行为都在对应的 System 中。
+</div>
+
+<!-- ===== 4. System ===== -->
+<h2 id="system"><span class="num">1.4</span> System — 逻辑系统</h2>
+
+<p>System 包含所有业务逻辑。EcsNode 提供两种 System 基类，对应两种绑定方式：</p>
+
+<h3>两种 System 基类</h3>
+<pre class="code"><span class="file-tag">System 基类定义</span>
+<span class="cm">// 方式1: Entity System — 绑定到特定 Entity 类型</span>
+<span class="kw">public abstract class</span> <span class="tp">AEntitySystem</span>&lt;TEntity&gt; : <span class="tp">IEcsEntitySystem</span>
+    <span class="kw">where</span> TEntity : <span class="tp">EcsEntity</span>
+{
+    <span class="kw">public</span> <span class="tp">Type</span> EntityType => <span class="kw">typeof</span>(TEntity);
+}
+
+<span class="cm">// 方式2: Component System — 绑定到 Entity + Component 组合</span>
+<span class="kw">public abstract class</span> <span class="tp">AComponentSystem</span>&lt;TEntity, TComponent&gt; : <span class="tp">IEcsComponentSystem</span>
+    <span class="kw">where</span> TEntity : <span class="tp">EcsEntity</span>
+    <span class="kw">where</span> TComponent : <span class="tp">EcsComponent</span>
+{
+    <span class="kw">public</span> <span class="tp">Type</span> EntityType => <span class="kw">typeof</span>(TEntity);
+    <span class="kw">public</span> <span class="tp">Type</span> ComponentType => <span class="kw">typeof</span>(TComponent);
+}
+</pre>
+
+<h3>实际 System 声明示例</h3>
+<pre class="code"><span class="file-tag">实际代码对比</span>
+<span class="cm">// Entity System 示例 — AbilitySystem 处理所有 Ability 类型的 Entity</span>
+<span class="kw">public class</span> <span class="tp">AbilitySystem</span> : <span class="tp">AEntitySystem</span>&lt;<span class="tp">Ability</span>&gt;,
+    <span class="tp">IAwake</span>&lt;<span class="tp">Ability</span>&gt;,       <span class="cm">// Ability 创建时调用</span>
+    <span class="tp">IEnable</span>&lt;<span class="tp">Ability</span>&gt;,      <span class="cm">// Ability 启用时调用</span>
+    <span class="tp">IDisable</span>&lt;<span class="tp">Ability</span>&gt;,     <span class="cm">// Ability 禁用时调用</span>
+    <span class="tp">IUpdate</span>&lt;<span class="tp">Ability</span>&gt;       <span class="cm">// 每帧对每个 Ability 调用</span>
+{
+    <span class="kw">public void</span> <span class="fn">Awake</span>(<span class="tp">Ability</span> entity) { <span class="cm">/* 初始化 */</span> }
+    <span class="kw">public void</span> <span class="fn">Enable</span>(<span class="tp">Ability</span> entity) { <span class="cm">/* 启用 */</span> }
+    <span class="kw">public void</span> <span class="fn">Disable</span>(<span class="tp">Ability</span> entity) { <span class="cm">/* 禁用 */</span> }
+    <span class="kw">public void</span> <span class="fn">Update</span>(<span class="tp">Ability</span> entity) { <span class="cm">/* 每帧 */</span> }
+}
+
+<span class="cm">// Component System 示例 — 只在 AbilityEffect 挂了 EffectDamageComponent 时生效</span>
+<span class="kw">public class</span> <span class="tp">EffectDamageSystem</span> : <span class="tp">AComponentSystem</span>&lt;<span class="tp">AbilityEffect</span>, <span class="tp">EffectDamageComponent</span>&gt;,
+    <span class="tp">IAwake</span>&lt;<span class="tp">AbilityEffect</span>, <span class="tp">EffectDamageComponent</span>&gt;
+{
+    <span class="kw">public void</span> <span class="fn">Awake</span>(<span class="tp">AbilityEffect</span> entity, <span class="tp">EffectDamageComponent</span> component)
+    {
+        <span class="cm">// 仅当 AbilityEffect 挂了 EffectDamageComponent 时触发</span>
+        component.DamageEffect = entity.EffectConfig <span class="kw">as</span> <span class="tp">DamageEffect</span>;
+        component.DamageValueFormula = component.DamageEffect.DamageValueFormula;
+    }
+}
+</pre>
+
+<div class="callout">
+  <div class="callout-title">Entity System vs Component System 选择指南</div>
+  <strong>用 Entity System 当：</strong>逻辑与 Entity 的整体生命周期相关（创建/销毁/启用/每帧更新）<br>
+  <strong>用 Component System 当：</strong>逻辑只在特定 Component 被挂载时才需要执行（如伤害计算只在 EffectDamageComponent 存在时才有意义）
+</div>
+
+<!-- ===== 5. DriveTypes ===== -->
+<h2 id="drives"><span class="num">1.5</span> DriveType — 生命周期接口</h2>
+
+<p>DriveType 是一系列接口，System 通过实现这些接口来声明「我想在什么时机被调用」。EcsNode 在对应时机自动找到并调用匹配的 System。</p>
+
+<h3>完整生命周期接口一览</h3>
+<table class="data">
+  <thead><tr><th>接口</th><th>触发时机</th><th>典型用途</th><th>参数</th></tr></thead>
+  <tbody>
+    <tr><td><code>IAwake&lt;T&gt;</code></td><td>Entity/Component 创建时</td><td>初始化配置加载</td><td>(T entity)</td></tr>
+    <tr><td><code>IInit&lt;T&gt;</code></td><td>手动调用 Init() 时</td><td>延迟初始化（依赖已就绪后）</td><td>(T entity)</td></tr>
+    <tr><td><code>IAfterInit&lt;T&gt;</code></td><td>Init 之后</td><td>初始化收尾</td><td>(T entity)</td></tr>
+    <tr><td><code>IEnable&lt;T&gt;</code></td><td>Enable = true 时</td><td>激活效果/订阅事件</td><td>(T entity) 或 (T entity, C comp)</td></tr>
+    <tr><td><code>IDisable&lt;T&gt;</code></td><td>Enable = false 时</td><td>暂停效果/取消订阅</td><td>(T entity) 或 (T entity, C comp)</td></tr>
+    <tr><td><code>IUpdate&lt;T&gt;</code></td><td>每帧（Update）</td><td>计时器更新/状态检测</td><td>(T entity)</td></tr>
+    <tr><td><code>IFixedUpdate&lt;T&gt;</code></td><td>每物理帧</td><td>物理相关更新</td><td>(T entity)</td></tr>
+    <tr><td><code>ISecondUpdate&lt;T&gt;</code></td><td>每秒</td><td>低频更新（如 DOT tick）</td><td>(T entity)</td></tr>
+    <tr><td><code>IOnChange&lt;T,C&gt;</code></td><td>Component 数据变更时</td><td>响应数据变化</td><td>(T entity, C comp)</td></tr>
+    <tr><td><code>IOnAddComponent&lt;T&gt;</code></td><td>Component 被添加时</td><td>观察组件变化</td><td>(T entity, EcsComponent comp)</td></tr>
+    <tr><td><code>IOnRemoveComponent&lt;T&gt;</code></td><td>Component 被移除时</td><td>清理引用</td><td>(T entity, EcsComponent comp)</td></tr>
+    <tr><td><code>IDestroy&lt;T&gt;</code></td><td>Entity/Component 销毁时</td><td>资源释放/引用清理</td><td>(T entity) 或 (T entity, C comp)</td></tr>
+    <tr><td><code>IPreDestroy&lt;T&gt;</code></td><td>Destroy 之前</td><td>销毁前的最终操作</td><td>(T entity)</td></tr>
+  </tbody>
+</table>
+
+<h3>生命周期执行顺序</h3>
+<div class="flow flow-v">
+  <div class="flow-row">
+    <div class="flow-node blue">AddChild&lt;T&gt;()</div>
+    <span class="flow-label">创建 Entity 实例</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node purple">IAwake.Awake(entity)</div>
+    <span class="flow-label">配置加载、子 Entity 创建</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node ghost">entity.Init()</div>
+    <span class="flow-label">（可选）手动触发</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node cyan">IInit → IAfterInit</div>
+    <span class="flow-label">延迟初始化（所有依赖就绪后）</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node green">Enable = true → IEnable</div>
+    <span class="flow-label">激活 —— 效果开始生效</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node warn">IUpdate / IFixedUpdate (每帧)</div>
+    <span class="flow-label">持续运行阶段</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node ghost">Enable = false → IDisable</div>
+    <span class="flow-label">暂停 —— 可再次 Enable</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node red">IPreDestroy → IDestroy</div>
+    <span class="flow-label">销毁 —— 清理资源、移除引用</span>
+  </div>
+</div>
+
+<div class="callout">
+  <div class="callout-title">IAwake vs IInit 的区别</div>
+  <strong>IAwake：</strong>在 <code>AddChild()</code> 时自动调用。此时 Entity 刚创建，可能还没有设置所有必要属性。<br>
+  <strong>IInit：</strong>在手动调用 <code>entity.Init()</code> 时触发。用于需要确保所有前置条件都满足后再执行的初始化逻辑。<br><br>
+  在 EGamePlay 中，<code>AbilitySystem.Attach()</code> 的顺序是：<code>AddChild()</code>（触发 Awake）→ <code>AddComponent()</code> → <code>ability.Init()</code>（触发 Init）。
+</div>
+
+<!-- ===== 6. EcsNode ===== -->
+<h2 id="ecsnode"><span class="num">1.6</span> EcsNode — 核心调度器</h2>
+
+<p>EcsNode 是整个框架的「大脑」。它在启动时通过反射发现所有 System，建立映射表，然后在运行时将 Entity/Component 的生命周期事件分发给匹配的 System。</p>
+
+<h3>启动注册流程</h3>
+<pre class="code"><span class="file-tag">EcsNode.cs 核心逻辑</span>
+<span class="kw">public class</span> <span class="tp">EcsNode</span>
+{
+    <span class="cm">// 单例</span>
+    <span class="kw">public static</span> <span class="tp">EcsNode</span> <span class="fn">Instance</span> { <span class="kw">get</span>; <span class="kw">private set</span>; }
+
+    <span class="cm">// ═══════════ System 注册表 ═══════════</span>
+    <span class="kw">public</span> <span class="tp">List</span>&lt;<span class="tp">IEcsSystem</span>&gt; <span class="fn">AllSystems</span>;           <span class="cm">// 所有已注册 System</span>
+    <span class="kw">public</span> <span class="tp">Dictionary</span>&lt;<span class="tp">Type</span>, <span class="tp">List</span>&lt;<span class="tp">IEcsSystem</span>&gt;&gt;
+        <span class="fn">EntityType2Systems</span>;                        <span class="cm">// Entity类型 → System列表</span>
+    <span class="kw">public</span> <span class="tp">List</span>&lt;<span class="tp">IUpdate</span>&gt; <span class="fn">AllUpdateSystems</span>;        <span class="cm">// 需要每帧 Update 的 System</span>
+    <span class="kw">public</span> <span class="tp">List</span>&lt;<span class="tp">IFixedUpdate</span>&gt; <span class="fn">AllFixedUpdateSystems</span>;
+
+    <span class="cm">// ═══════════ Entity 追踪 ═══════════</span>
+    <span class="kw">public</span> <span class="tp">Dictionary</span>&lt;<span class="tp">long</span>, <span class="tp">EcsEntity</span>&gt; <span class="fn">AllEntities</span>;  <span class="cm">// 全局 Entity 注册表</span>
+    <span class="kw">public</span> <span class="tp">Dictionary</span>&lt;<span class="tp">Type</span>, <span class="tp">HashSet</span>&lt;<span class="tp">EcsEntity</span>&gt;&gt;
+        <span class="fn">Type2Entities</span>;                             <span class="cm">// 类型 → Entity 集合（用于 Update 遍历）</span>
+
+    <span class="cm">// ═══════════ 启动流程 ═══════════</span>
+    <span class="kw">public void</span> <span class="fn">RegisterSystems</span>()
+    {
+        <span class="cm">// 1. 扫描所有程序集中继承了 IEcsSystem 的类</span>
+        <span class="cm">// 2. 创建实例并注册到映射表</span>
+        <span class="cm">// 3. 通过反射获取每个 System 实现的接口方法</span>
+        <span class="cm">// 4. 缓存方法信息（MethodInfo）用于后续快速调用</span>
+    }
+
+    <span class="kw">public void</span> <span class="fn">RegisterDrives</span>()
+    {
+        <span class="cm">// 注册所有 DriveType 接口：</span>
+        <span class="cm">// IAwake, IInit, IAfterInit, IEnable, IDisable,</span>
+        <span class="cm">// IUpdate, IFixedUpdate, IDestroy, IOnChange,</span>
+        <span class="cm">// IOnAddComponent, IOnRemoveComponent, IDispatch</span>
+    }
+}
+</pre>
+
+<h3>System 分发机制</h3>
+<pre class="code"><span class="file-tag">核心分发方法</span>
+<span class="cm">// 驱动 Entity System — 找到匹配的 System 并调用对应方法</span>
+<span class="kw">public void</span> <span class="fn">DriveEntitySystems</span>(<span class="tp">EcsEntity</span> entity, <span class="tp">Type</span> driveType)
+{
+    <span class="kw">var</span> entityType = entity.GetType();
+    <span class="kw">if</span> (!EntityType2Systems.TryGetValue(entityType, <span class="kw">out var</span> systems))
+        <span class="kw">return</span>;
+
+    <span class="kw">foreach</span> (<span class="kw">var</span> system <span class="kw">in</span> systems)
+    {
+        <span class="cm">// 检查 system 是否实现了对应的 driveType 接口</span>
+        <span class="kw">if</span> (system <span class="kw">is</span> driveType的接口)
+        {
+            <span class="cm">// 通过缓存的 MethodInfo 调用对应方法</span>
+            cachedMethod.Invoke(system, <span class="kw">new object</span>[] { entity });
+        }
+    }
+}
+
+<span class="cm">// 驱动 Component System</span>
+<span class="kw">public void</span> <span class="fn">DriveComponentSystems</span>(<span class="tp">EcsEntity</span> entity, <span class="tp">EcsComponent</span> comp, <span class="tp">Type</span> driveType)
+{
+    <span class="cm">// 类似，但额外匹配 ComponentType</span>
+    <span class="cm">// 只有 System.EntityType == entity.GetType()</span>
+    <span class="cm">// 且 System.ComponentType == comp.GetType() 的 System 才会被调用</span>
+}
+
+<span class="cm">// Update 驱动 — 每帧遍历所有需要 Update 的 Entity</span>
+<span class="kw">public void</span> <span class="fn">DriveEntityUpdate</span>()
+{
+    <span class="kw">foreach</span> (<span class="kw">var</span> pair <span class="kw">in</span> Type2Entities)
+    {
+        <span class="kw">var</span> entityType = pair.Key;
+        <span class="kw">var</span> entities = pair.Value;
+        <span class="kw">var</span> systems = EntityType2Systems[entityType];
+
+        <span class="kw">foreach</span> (<span class="kw">var</span> entity <span class="kw">in</span> entities)
+        {
+            <span class="kw">foreach</span> (<span class="kw">var</span> system <span class="kw">in</span> systems.OfType&lt;<span class="tp">IUpdate</span>&gt;())
+            {
+                system.Update(entity);
+            }
+        }
+    }
+}
+</pre>
+
+<h3>ID 生成策略</h3>
+<pre class="code"><span class="file-tag">64位 ID 组成</span>
+<span class="cm">// EcsNode 的 ID 是 64 位 long，由三部分组成：</span>
+<span class="cm">// [14-bit 类型ID][30-bit 时间戳][20-bit 计数器]</span>
+<span class="cm">//</span>
+<span class="cm">// 类型ID：标识 Entity 类型（最多 16384 种）</span>
+<span class="cm">// 时间戳：相对启动时间（30位 ≈ 34年不溢出）</span>
+<span class="cm">// 计数器：同一毫秒内的序号（100万/毫秒不重复）</span>
+<span class="cm">//</span>
+<span class="cm">// 好处：ID 本身包含类型信息，可以从 ID 反推 Entity 类型</span>
+</pre>
+
+<!-- ===== 7. EventBus ===== -->
+<h2 id="eventbus"><span class="num">1.7</span> EventBus — 事件总线</h2>
+
+<p>EventBus 是全局事件分发器，管理多个 EcsNode 实例（适用于多 ECS 世界的场景）。在 EGamePlay 中通常只有一个 EcsNode，但 EventBus 提供了扩展能力。</p>
+
+<pre class="code"><span class="file-tag">EventBus.cs</span>
+<span class="kw">public static class</span> <span class="tp">EventBus</span>
+{
+    <span class="cm">// 双向链表管理多个 EcsNode</span>
+    <span class="kw">private static</span> <span class="tp">LinkedList</span>&lt;<span class="tp">EcsNode</span>&gt; nodes;
+
+    <span class="cm">// 注册 EcsNode</span>
+    <span class="kw">public static void</span> <span class="fn">AddEcs</span>(<span class="tp">EcsNode</span> ecsNode) { nodes.AddLast(ecsNode); }
+
+    <span class="cm">// 全局 Update 驱动 — 由 Unity MonoBehaviour 调用</span>
+    <span class="kw">public static void</span> <span class="fn">DriveUpdate</span>()
+    {
+        <span class="kw">foreach</span> (<span class="kw">var</span> node <span class="kw">in</span> nodes)
+            node.<span class="fn">DriveEntityUpdate</span>();
+    }
+
+    <span class="kw">public static void</span> <span class="fn">DriveFixedUpdate</span>()
+    {
+        <span class="kw">foreach</span> (<span class="kw">var</span> node <span class="kw">in</span> nodes)
+            node.<span class="fn">DriveEntityFixedUpdate</span>();
+    }
+
+    <span class="cm">// 全局事件广播</span>
+    <span class="kw">public static void</span> <span class="fn">Send</span>&lt;T&gt;(T eventObj) <span class="kw">where</span> T : <span class="tp">IEvent</span>
+    {
+        <span class="cm">// 向所有 EcsNode 中注册了 IEventHandle<T> 的 System 广播</span>
+    }
+}
+</pre>
+
+<div class="callout">
+  <div class="callout-title">Unity 入口</div>
+  在 Unity 侧，有一个 MonoBehaviour 负责每帧调用 <code>EventBus.DriveUpdate()</code> 和 <code>EventBus.DriveFixedUpdate()</code>。这是 ECS 世界与 Unity 引擎的唯一连接点。所有业务逻辑都在 EcsNode 内部通过 System 驱动。
+</div>
+
+<!-- ===== 8. EntityState ===== -->
+<h2 id="entitystate"><span class="num">1.8</span> EntityState — 安全引用</h2>
+
+<p>当你持有一个 Entity 引用，但那个 Entity 可能随时被销毁（如目标死亡），如何避免空引用？EntityState 解决这个问题。</p>
+
+<pre class="code"><span class="file-tag">EntityState.cs</span>
+<span class="kw">public struct</span> <span class="tp">EntityState</span>&lt;T&gt; <span class="kw">where</span> T : <span class="tp">EcsEntity</span>
+{
+    <span class="kw">private</span> T _entity;
+    <span class="kw">private</span> <span class="tp">long</span> _instanceId;  <span class="cm">// 创建时记录的 InstanceId</span>
+
+    <span class="kw">public</span> <span class="fn">EntityState</span>(T entity)
+    {
+        _entity = entity;
+        _instanceId = entity?.InstanceId ?? <span class="nm">0</span>;
+    }
+
+    <span class="cm">// 隐式转换 — 自动检测实体是否还有效</span>
+    <span class="kw">public static implicit operator</span> T(<span class="tp">EntityState</span>&lt;T&gt; state)
+    {
+        <span class="kw">if</span> (state._entity == <span class="kw">null</span>) <span class="kw">return null</span>;
+        <span class="kw">if</span> (state._entity.IsDisposed) <span class="kw">return null</span>;
+        <span class="cm">// InstanceId 不匹配说明原 Entity 已销毁，新 Entity 复用了内存</span>
+        <span class="kw">if</span> (state._entity.InstanceId != state._instanceId) <span class="kw">return null</span>;
+        <span class="kw">return</span> state._entity;
+    }
+}
+
+<span class="cm">// 使用示例：</span>
+<span class="tp">EntityState</span>&lt;<span class="tp">CombatEntity</span>&gt; targetRef = <span class="kw">new</span>(target);
+<span class="cm">// ... 若干帧后 ...</span>
+<span class="tp">CombatEntity</span> t = targetRef;  <span class="cm">// 如果 target 已死，t == null</span>
+<span class="kw">if</span> (t != <span class="kw">null</span>) { <span class="cm">/* 安全操作 */</span> }
+</pre>
+
+<div class="callout good">
+  <div class="callout-title">为什么不用 WeakReference</div>
+  C# 的 <code>WeakReference</code> 基于 GC 判断对象存活，但 EcsEntity 的「逻辑死亡」（被战斗系统销毁）和 GC 回收时机不同步。EntityState 通过 <code>InstanceId</code> 比对实现了<strong>逻辑层面</strong>的安全引用，不依赖 GC。
+</div>
+
+<!-- ===== 9. Summary ===== -->
+<h2 id="summary"><span class="num">1.9</span> 设计总结</h2>
+
+<div class="card-grid">
+  <div class="card">
+    <div class="card-title">为什么不用纯 ECS (DOTS)?</div>
+    <div class="card-body">DOTS 的 Archetype 内存布局对技能系统帮助有限 — 技能逻辑复杂但实体数量少（一场战斗几十个 Entity）。OOP-ECS 换来了更好的调试体验和更自然的业务建模。</div>
+  </div>
+  <div class="card green">
+    <div class="card-title">反射的性能影响</div>
+    <div class="card-body">反射只在<strong>启动时</strong>执行一次（注册 System、缓存 MethodInfo）。运行时的 DriveEntitySystems 使用缓存的方法引用，实际开销接近直接调用。</div>
+  </div>
+  <div class="card warn">
+    <div class="card-title">所有权 = 生命周期</div>
+    <div class="card-body">Parent-Children 关系不只是组织结构，更是生命周期管理。CombatEntity 死亡 → 所有 Ability 销毁 → 所有 Effect/Trigger 销毁。零手动清理。</div>
+  </div>
+  <div class="card bad">
+    <div class="card-title">已知局限</div>
+    <div class="card-body">• 大量短生命周期 Entity 的 GC 压力（Action 每次触发都 new）<br>• 无对象池<br>• System 无法动态增删（启动时注册，运行时固定）</div>
+  </div>
+</div>
+
+<div class="callout good">
+  <div class="callout-title">验收标准 — 读完本章后你应该能回答</div>
+  1. EcsEntity 的 AddChild 和 AddComponent 分别在什么时候触发什么 System？<br>
+  2. AEntitySystem&lt;T&gt; 和 AComponentSystem&lt;T,C&gt; 的区别是什么？什么时候用哪个？<br>
+  3. Entity.Enable = true 时会发生什么连锁反应？<br>
+  4. System 是如何被发现和注册的？运行时分发的开销在哪里？<br>
+  5. EntityState 解决了什么问题？和 C# WeakReference 的区别是什么？
+</div>
+
+<!-- Chapter Navigation -->
+<div class="ch-nav">
+  <a href="index.html">
+    <span class="dir">← 返回</span>
+    目录
+  </a>
+  <a href="ch02-numeric.html">
+    <span class="dir">下一章 →</span>
+    Ch02 数值系统
+  </a>
+</div>
+
+</main>
+</div>
+</body>
+</html>

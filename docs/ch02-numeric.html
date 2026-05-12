@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ch02 — FloatNumeric 数值系统 | EGamePlay</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&family=Noto+Sans+SC:wght@400;600;700;900&family=JetBrains+Mono:wght@400;600&family=Playfair+Display:wght@900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="doc-layout">
+
+<nav class="doc-sidebar">
+  <div class="nav-brand"><a href="index.html">EGamePlay</a></div>
+  <div class="nav-section">Chapters</div>
+  <ul class="nav-list">
+    <li><a href="ch01-ecsnode.html"><span class="ch-num">01</span> EcsNode 框架底座</a></li>
+    <li><a class="active" href="ch02-numeric.html"><span class="ch-num">02</span> 数值系统</a></li>
+    <li><a href="ch03-combat-entity.html"><span class="ch-num">03</span> 战斗实体</a></li>
+    <li><a href="ch04-ability.html"><span class="ch-num">04</span> 技能/Buff 核心</a></li>
+    <li><a href="ch05-effect.html"><span class="ch-num">05</span> 效果系统</a></li>
+    <li><a href="ch06-trigger.html"><span class="ch-num">06</span> 触发系统</a></li>
+    <li><a href="ch07-execution.html"><span class="ch-num">07</span> 执行时间轴</a></li>
+    <li><a href="ch08-action.html"><span class="ch-num">08</span> 行动系统</a></li>
+    <li><a href="ch09-config.html"><span class="ch-num">09</span> 配置管线</a></li>
+  </ul>
+  <div class="nav-section" style="margin-top:24px">本章目录</div>
+  <ul class="nav-list">
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#modifier">FloatModifier 修改器</a></li>
+    <li><a href="#collection">ModifierCollection 集合</a></li>
+    <li><a href="#numeric">FloatNumeric 数值</a></li>
+    <li><a href="#formula">四层计算公式</a></li>
+    <li><a href="#attribute">AttributeComponent</a></li>
+    <li><a href="#usage">使用场景分析</a></li>
+    <li><a href="#summary">设计总结</a></li>
+  </ul>
+</nav>
+
+<main class="doc-main">
+<div class="ch-header">
+  <div class="ch-kicker">Chapter 02</div>
+  <h1>FloatNumeric — <span class="accent">数值系统</span></h1>
+  <p class="ch-subtitle">战斗数值的一切基础。HP、攻击力、防御、暴击率、移速...所有可变属性都通过 FloatNumeric 管理。它的核心设计目标：<strong>所有修改可逆</strong> — Buff 结束时移除 Modifier，数值精确恢复。</p>
+</div>
+
+<h2 id="overview"><span class="num">2.1</span> 概述</h2>
+
+<div class="callout">
+  <div class="callout-title">核心问题</div>
+  一个角色的攻击力 = 基础值 + 装备加成 + Buff 加成 + 被动技能 + ...。当某个 Buff 结束时，如何精确回退它的效果？<br><br>
+  <strong>错误做法：</strong> <code>atk = atk - buffValue</code> — 浮点误差累积，且百分比加成无法简单减回来<br>
+  <strong>正确做法：</strong> 每个修改源持有自己的 Modifier 引用，移除时从集合中删除，重新计算最终值
+</div>
+
+<div class="section-label">文件位置</div>
+<pre class="code"><span class="file-tag">目录</span>
+Assets/App.Model/Game.Model/.../CombatEntity/Attribute/
+├── FloatNumeric.cs          <span class="cm">// 带修改器的数值（69行）</span>
+├── FloatModifier.cs         <span class="cm">// 修改器和修改器集合（44行）</span>
+└── [AttributeComponent.cs]  <span class="cm">// 在 CombatEntity 目录下（29行）</span>
+</pre>
+
+<h2 id="modifier"><span class="num">2.2</span> FloatModifier — 修改器</h2>
+
+<p>FloatModifier 是最小单元 — 一个可变的浮点数值。每次 Buff 给角色加攻击力时，就创建一个 FloatModifier 并添加到对应集合中。</p>
+
+<pre class="code"><span class="file-tag">FloatModifier.cs</span>
+<span class="kw">namespace</span> EGamePlay.Combat
+{
+    <span class="cm">/// 单个修改器 — 代表一个修改源的贡献值</span>
+    <span class="kw">public class</span> <span class="tp">FloatModifier</span>
+    {
+        <span class="kw">public float</span> <span class="fn">Value</span>;  <span class="cm">// 修改值（如 +20 攻击力，或 +50% 百分比）</span>
+    }
+
+    <span class="cm">/// 修改器类型枚举</span>
+    <span class="kw">public enum</span> <span class="tp">ModifierType</span>
+    {
+        <span class="fn">Add</span>,          <span class="cm">// 基础加法（第一层）</span>
+        <span class="fn">PctAdd</span>,       <span class="cm">// 百分比加法（第二层）</span>
+        <span class="fn">FinalAdd</span>,     <span class="cm">// 最终加法（第三层）</span>
+        <span class="fn">FinalPctAdd</span>,  <span class="cm">// 最终百分比（第四层）</span>
+    }
+}
+</pre>
+
+<div class="callout">
+  <div class="callout-title">为什么 Modifier 是 class 不是 struct</div>
+  因为需要<strong>引用语义</strong>。当 Buff 结束时，我们需要找到并移除「那个特定的 Modifier 实例」，而不是通过值匹配。两个 Buff 可能都加 20 攻击力，但移除其中一个不能影响另一个。
+</div>
+
+<h2 id="collection"><span class="num">2.3</span> FloatModifierCollection — 修改器集合</h2>
+
+<p>多个 Modifier 组成一个 Collection（如所有加法修改器放一个集合）。集合负责自动维护 TotalValue（所有 Modifier.Value 之和）。</p>
+
+<pre class="code"><span class="file-tag">FloatModifier.cs（续）</span>
+<span class="kw">public class</span> <span class="tp">FloatModifierCollection</span>
+{
+    <span class="cm">/// 当 TotalValue 变化时通知外层 FloatNumeric 重算</span>
+    <span class="kw">public event</span> <span class="tp">Action</span> <span class="fn">UpdateEvent</span>;
+
+    <span class="cm">/// 所有修改器的值之和</span>
+    <span class="kw">public float</span> <span class="fn">TotalValue</span> { <span class="kw">get</span>; <span class="kw">private set</span>; }
+
+    <span class="cm">/// 内部存储</span>
+    <span class="kw">private</span> <span class="tp">List</span>&lt;<span class="tp">FloatModifier</span>&gt; <span class="fn">_modifiers</span> = <span class="kw">new</span>();
+
+    <span class="cm">/// 添加修改器</span>
+    <span class="kw">public void</span> <span class="fn">AddModifier</span>(<span class="tp">FloatModifier</span> modifier)
+    {
+        _modifiers.Add(modifier);
+        <span class="hl">TotalValue += modifier.Value;</span>  <span class="cm">// 增量更新，O(1)</span>
+        UpdateEvent?.Invoke();          <span class="cm">// 通知 FloatNumeric 重算最终值</span>
+    }
+
+    <span class="cm">/// 移除修改器</span>
+    <span class="kw">public void</span> <span class="fn">RemoveModifier</span>(<span class="tp">FloatModifier</span> modifier)
+    {
+        _modifiers.Remove(modifier);
+        <span class="hl">TotalValue -= modifier.Value;</span>  <span class="cm">// 增量更新，O(1)</span>
+        UpdateEvent?.Invoke();
+    }
+
+    <span class="cm">/// 全量重算（用于修改器值被外部改变后）</span>
+    <span class="kw">public void</span> <span class="fn">Update</span>()
+    {
+        TotalValue = <span class="nm">0</span>;
+        <span class="kw">foreach</span> (<span class="kw">var</span> m <span class="kw">in</span> _modifiers)
+            TotalValue += m.Value;
+        UpdateEvent?.Invoke();
+    }
+}
+</pre>
+
+<div class="callout good">
+  <div class="callout-title">增量更新 vs 全量重算</div>
+  Add/Remove 时直接 ±= 单个值，<strong>O(1) 时间复杂度</strong>。只有在 Modifier.Value 被外部修改（罕见情况）时才需要全量 Update()。这对于频繁 Buff 增删的 MOBA 场景非常关键。
+</div>
+
+<h2 id="numeric"><span class="num">2.4</span> FloatNumeric — 完整数值类</h2>
+
+<p>FloatNumeric 持有一个 baseValue 和四个 ModifierCollection，任何一个变化都会触发重算最终 Value。</p>
+
+<pre class="code"><span class="file-tag">FloatNumeric.cs — 完整源码</span>
+<span class="kw">namespace</span> EGamePlay.Combat
+{
+    <span class="kw">public class</span> <span class="tp">FloatNumeric</span>
+    {
+        <span class="cm">// ═══════════ 最终计算结果 ═══════════</span>
+        <span class="kw">public float</span> <span class="fn">Value</span> { <span class="kw">get</span>; <span class="kw">private set</span>; }
+
+        <span class="cm">// ═══════════ 基础值 ═══════════</span>
+        <span class="kw">public float</span> <span class="fn">baseValue</span>;
+
+        <span class="cm">// ═══════════ 四层修改器集合 ═══════════</span>
+        <span class="kw">public</span> <span class="tp">FloatModifierCollection</span> <span class="fn">add</span>          = <span class="kw">new</span>();  <span class="cm">// 加法层</span>
+        <span class="kw">public</span> <span class="tp">FloatModifierCollection</span> <span class="fn">pctAdd</span>       = <span class="kw">new</span>();  <span class="cm">// 百分比层</span>
+        <span class="kw">public</span> <span class="tp">FloatModifierCollection</span> <span class="fn">finalAdd</span>     = <span class="kw">new</span>();  <span class="cm">// 最终加法层</span>
+        <span class="kw">public</span> <span class="tp">FloatModifierCollection</span> <span class="fn">finalPctAdd</span>  = <span class="kw">new</span>();  <span class="cm">// 最终百分比层</span>
+
+        <span class="cm">// ═══════════ 类型映射 ═══════════</span>
+        <span class="kw">public</span> <span class="tp">Dictionary</span>&lt;<span class="tp">ModifierType</span>, <span class="tp">FloatModifierCollection</span>&gt; <span class="fn">TypeModifierCollections</span>;
+
+        <span class="cm">// ═══════════ 属性类型标识 ═══════════</span>
+        <span class="kw">public</span> <span class="tp">AttributeType</span> <span class="fn">AttributeType</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+
+        <span class="cm">// ═══════════ 构造函数 ═══════════</span>
+        <span class="kw">public</span> <span class="fn">FloatNumeric</span>()
+        {
+            TypeModifierCollections = <span class="kw">new</span> <span class="tp">Dictionary</span>&lt;<span class="tp">ModifierType</span>, <span class="tp">FloatModifierCollection</span>&gt;
+            {
+                { ModifierType.Add, add },
+                { ModifierType.PctAdd, pctAdd },
+                { ModifierType.FinalAdd, finalAdd },
+                { ModifierType.FinalPctAdd, finalPctAdd },
+            };
+
+            <span class="cm">// 订阅所有集合的变化事件 → 触发重算</span>
+            add.UpdateEvent += <span class="fn">Update</span>;
+            pctAdd.UpdateEvent += <span class="fn">Update</span>;
+            finalAdd.UpdateEvent += <span class="fn">Update</span>;
+            finalPctAdd.UpdateEvent += <span class="fn">Update</span>;
+        }
+
+        <span class="cm">// ═══════════ 核心计算 ═══════════</span>
+        <span class="kw">public void</span> <span class="fn">Update</span>()
+        {
+            <span class="kw">var</span> value1 = baseValue;
+            <span class="kw">var</span> value2 = (value1 + add.TotalValue) * (<span class="nm">100</span> + pctAdd.TotalValue) / <span class="nm">100</span>;
+            <span class="kw">var</span> value3 = (value2 + finalAdd.TotalValue) * (<span class="nm">100</span> + finalPctAdd.TotalValue) / <span class="nm">100</span>;
+            Value = value3;
+        }
+
+        <span class="cm">// ═══════════ 设置基础值 ═══════════</span>
+        <span class="kw">public void</span> <span class="fn">SetBase</span>(<span class="kw">float</span> value)
+        {
+            baseValue = value;
+            Update();
+        }
+    }
+}
+</pre>
+
+<h2 id="formula"><span class="num">2.5</span> 四层计算公式详解</h2>
+
+<h3>公式拆解</h3>
+<pre class="code"><span class="file-tag">计算步骤</span>
+<span class="cm">// 第一层：基础值</span>
+value1 = <span class="fn">baseValue</span>
+
+<span class="cm">// 第二层：基础 + 加法修改，然后乘以百分比</span>
+value2 = (value1 + <span class="fn">add</span>.TotalValue) × (100 + <span class="fn">pctAdd</span>.TotalValue) / 100
+
+<span class="cm">// 第三层：上一层结果 + 最终加法，再乘以最终百分比</span>
+value3 = (value2 + <span class="fn">finalAdd</span>.TotalValue) × (100 + <span class="fn">finalPctAdd</span>.TotalValue) / 100
+
+<span class="cm">// 最终值</span>
+Value = value3
+</pre>
+
+<h3>具体计算示例</h3>
+<table class="data">
+  <thead><tr><th>场景</th><th>baseValue</th><th>Add</th><th>PctAdd</th><th>FinalAdd</th><th>FinalPctAdd</th><th>结果</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>纯基础</td><td>100</td><td>0</td><td>0</td><td>0</td><td>0</td>
+      <td><strong>100</strong></td>
+    </tr>
+    <tr>
+      <td>+装备 20 攻</td><td>100</td><td>20</td><td>0</td><td>0</td><td>0</td>
+      <td>(100+20)×1 = <strong>120</strong></td>
+    </tr>
+    <tr>
+      <td>+Buff 50% 攻</td><td>100</td><td>20</td><td>50</td><td>0</td><td>0</td>
+      <td>(100+20)×1.5 = <strong>180</strong></td>
+    </tr>
+    <tr>
+      <td>+光环 +10 最终</td><td>100</td><td>20</td><td>50</td><td>10</td><td>0</td>
+      <td>(180+10)×1 = <strong>190</strong></td>
+    </tr>
+    <tr>
+      <td>+被动 20% 最终</td><td>100</td><td>20</td><td>50</td><td>10</td><td>20</td>
+      <td>(180+10)×1.2 = <strong>228</strong></td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <div class="callout-title">四层的设计意义</div>
+  <strong>为什么不是单层 List？</strong><br><br>
+
+  <strong>Add + PctAdd（基础层）：</strong>代表装备/基础 Buff 的加成。百分比是基于「基础+Add」计算的。<br>
+  → 意义：一个 +50% Buff 只加成「基础攻击」，不会加成后续的最终加法<br><br>
+
+  <strong>FinalAdd + FinalPctAdd（最终层）：</strong>代表不受基础百分比影响的加成。<br>
+  → 意义：「无视防御的固定穿透伤害」或「最终伤害减免 30%」<br><br>
+
+  <strong>实际 MOBA 映射：</strong><br>
+  • 装备面板攻击力 → Add<br>
+  • 「攻击力提升 50%」Buff → PctAdd<br>
+  • 红 Buff 附加 50 真实伤害 → FinalAdd<br>
+  • 「造成伤害提高 20%」（如输出方的终伤） → FinalPctAdd
+</div>
+
+<h3>可逆性证明</h3>
+<pre class="code"><span class="file-tag">可逆性示例</span>
+<span class="cm">// 场景：角色有 base=100，装备+20(Add)，Buff+50%(PctAdd)</span>
+<span class="cm">// 当前值 = (100+20) * 1.5 = 180</span>
+
+<span class="cm">// Buff 结束，移除 PctAdd Modifier：</span>
+pctAdd.<span class="fn">RemoveModifier</span>(buffModifier);  <span class="cm">// pctAdd.TotalValue: 50 → 0</span>
+<span class="cm">// 自动触发 Update():</span>
+<span class="cm">// value2 = (100+20) * (100+0)/100 = 120 ← 精确回退到 Buff 前</span>
+
+<span class="cm">// 对比直接减法：</span>
+<span class="cm">// 180 - (100+20)*0.5 = 180 - 60 = 120 ← 数学上正确但需要记住原始计算</span>
+<span class="cm">// 180 - 50% = 90 ← 错误！这是减了 180 的 50%</span>
+<span class="cm">// 用 Modifier 集合就不会犯这种错误 — Remove 后自动重算</span>
+</pre>
+
+<h2 id="attribute"><span class="num">2.6</span> AttributeComponent — 属性面板</h2>
+
+<p>AttributeComponent 是 CombatEntity 的组件，持有该角色的所有属性值（都是 FloatNumeric 实例）。</p>
+
+<pre class="code"><span class="file-tag">AttributeComponent.cs — 完整源码</span>
+<span class="kw">namespace</span> EGamePlay.Combat
+{
+    <span class="cm">/// 战斗属性组件 — 挂在 CombatEntity 上</span>
+    <span class="kw">public class</span> <span class="tp">AttributeComponent</span> : <span class="tp">EcsComponent</span>
+    {
+        <span class="kw">public</span> <span class="tp">FloatNumeric</span> <span class="fn">MoveSpeed</span>            = <span class="kw">new</span>();  <span class="cm">// 移动速度</span>
+        <span class="kw">public</span> <span class="tp">FloatNumeric</span> <span class="fn">HealthPoint</span>          = <span class="kw">new</span>();  <span class="cm">// 当前生命值</span>
+        <span class="kw">public</span> <span class="tp">FloatNumeric</span> <span class="fn">HealthPointMax</span>       = <span class="kw">new</span>();  <span class="cm">// 最大生命值</span>
+        <span class="kw">public</span> <span class="tp">FloatNumeric</span> <span class="fn">Attack</span>              = <span class="kw">new</span>();  <span class="cm">// 攻击力</span>
+        <span class="kw">public</span> <span class="tp">FloatNumeric</span> <span class="fn">Defense</span>             = <span class="kw">new</span>();  <span class="cm">// 防御力</span>
+        <span class="kw">public</span> <span class="tp">FloatNumeric</span> <span class="fn">AbilityPower</span>        = <span class="kw">new</span>();  <span class="cm">// 法术强度</span>
+        <span class="kw">public</span> <span class="tp">FloatNumeric</span> <span class="fn">SpellResistance</span>     = <span class="kw">new</span>();  <span class="cm">// 魔法抗性</span>
+        <span class="kw">public</span> <span class="tp">FloatNumeric</span> <span class="fn">CriticalProbability</span> = <span class="kw">new</span>();  <span class="cm">// 暴击率</span>
+    }
+}
+</pre>
+
+<h3>NumericSystem — 属性操作 API</h3>
+<pre class="code"><span class="file-tag">NumericSystem 关键方法</span>
+<span class="kw">public static class</span> <span class="tp">NumericSystem</span>
+{
+    <span class="cm">/// 设置基础值</span>
+    <span class="kw">public static void</span> <span class="fn">SetBase</span>(<span class="tp">FloatNumeric</span> numeric, <span class="kw">float</span> value)
+    {
+        numeric.baseValue = value;
+        numeric.Update();
+    }
+
+    <span class="cm">/// 添加修改器</span>
+    <span class="kw">public static void</span> <span class="fn">AddModifier</span>(<span class="tp">FloatNumeric</span> numeric, <span class="tp">ModifierType</span> type, <span class="tp">FloatModifier</span> modifier)
+    {
+        numeric.TypeModifierCollections[type].AddModifier(modifier);
+        <span class="cm">// ↑ 自动触发 Collection.UpdateEvent → FloatNumeric.Update() → 重算 Value</span>
+    }
+
+    <span class="cm">/// 移除修改器</span>
+    <span class="kw">public static void</span> <span class="fn">RemoveModifier</span>(<span class="tp">FloatNumeric</span> numeric, <span class="tp">ModifierType</span> type, <span class="tp">FloatModifier</span> modifier)
+    {
+        numeric.TypeModifierCollections[type].RemoveModifier(modifier);
+    }
+}
+</pre>
+
+<h2 id="usage"><span class="num">2.7</span> 实际使用场景分析</h2>
+
+<h3>场景 1: Buff 修改属性</h3>
+<pre class="code"><span class="file-tag">EffectAttributeSystem.cs — Enable/Disable</span>
+<span class="cm">// Buff 生效时（Enable）— 添加 Modifier</span>
+<span class="kw">public void</span> <span class="fn">Enable</span>(<span class="tp">AbilityEffect</span> entity, <span class="tp">EffectAttributeModifyComponent</span> component)
+{
+    <span class="kw">var</span> parentEntity = entity.OwnerAbility.Parent;  <span class="cm">// 获取挂载 Buff 的角色</span>
+    <span class="kw">var</span> effect = component.AttributeModifyEffect;
+
+    <span class="cm">// 解析配置中的数值（如 "50" 或 "30%"）</span>
+    <span class="kw">var</span> numericValue = component.ModifyValueFormula.Replace(<span class="st">"%"</span>, <span class="st">""</span>);
+    <span class="kw">var</span> value = (<span class="kw">float</span>)ExpressionHelper.Evaluate(numericValue);
+
+    <span class="cm">// 创建修改器实例</span>
+    <span class="kw">var</span> modifier = <span class="kw">new</span> <span class="tp">FloatModifier</span>() { Value = value };
+
+    <span class="cm">// 找到目标属性（如 Attack）</span>
+    <span class="kw">var</span> numeric = AttributeSystem.<span class="fn">GetNumeric</span>(parentEntity <span class="kw">as</span> CombatEntity, effect.AttributeType);
+
+    <span class="cm">// 根据修改类型添加到对应层</span>
+    <span class="kw">if</span> (effect.ModifyType == ModifyType.Add)
+        NumericSystem.<span class="fn">AddModifier</span>(numeric, ModifierType.FinalAdd, modifier);
+    <span class="kw">if</span> (effect.ModifyType == ModifyType.PercentAdd)
+        NumericSystem.<span class="fn">AddModifier</span>(numeric, ModifierType.FinalPctAdd, modifier);
+
+    <span class="cm">// ★ 保存 modifier 引用，用于 Disable 时移除</span>
+    <span class="hl">component.AttributeModifier = modifier;</span>
+}
+
+<span class="cm">// Buff 失效时（Disable）— 移除同一个 Modifier 实例</span>
+<span class="kw">public void</span> <span class="fn">Disable</span>(<span class="tp">AbilityEffect</span> entity, <span class="tp">EffectAttributeModifyComponent</span> component)
+{
+    <span class="kw">var</span> numeric = AttributeSystem.GetNumeric(...);
+    <span class="kw">if</span> (component.AttributeModifyEffect.ModifyType == ModifyType.Add)
+        NumericSystem.<span class="fn">RemoveModifier</span>(numeric, ModifierType.FinalAdd, <span class="hl">component.AttributeModifier</span>);
+    <span class="kw">if</span> (component.AttributeModifyEffect.ModifyType == ModifyType.PercentAdd)
+        NumericSystem.<span class="fn">RemoveModifier</span>(numeric, ModifierType.FinalPctAdd, <span class="hl">component.AttributeModifier</span>);
+    <span class="cm">// ↑ 移除的是同一个实例！自动触发重算，数值精确恢复</span>
+}
+</pre>
+
+<div class="callout good">
+  <div class="callout-title">完美闭环</div>
+  注意 <code>component.AttributeModifier = modifier</code> 这行：组件保存了 Modifier 引用。<br>
+  当 Buff 结束（Ability.Enable = false），EcsNode 自动调用所有 Component 的 IDisable。<br>
+  EffectAttributeSystem.Disable 用保存的引用 Remove 掉 Modifier。<br>
+  FloatNumeric 自动 Update()。<strong>零手动管理，零遗漏。</strong>
+</div>
+
+<h3>场景 2: 伤害计算读取属性</h3>
+<pre class="code"><span class="file-tag">DamageActionSystem.cs</span>
+<span class="cm">// 伤害计算时直接读取 .Value — 已经是所有修改器叠加后的最终值</span>
+<span class="kw">var</span> atk = creator.GetComponent&lt;<span class="tp">AttributeComponent</span>&gt;().Attack.<span class="fn">Value</span>;
+<span class="kw">var</span> def = target.GetComponent&lt;<span class="tp">AttributeComponent</span>&gt;().Defense.<span class="fn">Value</span>;
+
+<span class="cm">// 伤害公式（MOBA 风格）</span>
+<span class="kw">var</span> damage = atk * (atk / (atk + def));  <span class="cm">// 递减防御公式</span>
+</pre>
+
+<h3>场景 3: 表达式解析</h3>
+<pre class="code"><span class="file-tag">EffectDamageSystem.cs — 伤害公式解析</span>
+<span class="cm">// 配置中可以写表达式，引用属性值作为参数</span>
+<span class="cm">// 例如 DamageValueFormula = "攻击力数值 * 1.5 + 100"</span>
+
+<span class="kw">private static int</span> <span class="fn">ParseDamage</span>(<span class="tp">AbilityEffect</span> entity)
+{
+    <span class="kw">var</span> component = entity.GetComponent&lt;<span class="tp">EffectDamageComponent</span>&gt;();
+    <span class="kw">var</span> expression = ExpressionHelper.ExpressionParser
+        .EvaluateExpression(component.DamageValueFormula);
+
+    <span class="cm">// 注入运行时参数值</span>
+    <span class="kw">if</span> (expression.Parameters.ContainsKey(<span class="st">"攻击力数值"</span>))
+    {
+        expression.Parameters[<span class="st">"攻击力数值"</span>].Value =
+            entity.OwnerEntity.GetComponent&lt;<span class="tp">AttributeComponent</span>&gt;().Attack.<span class="fn">Value</span>;
+    }
+
+    <span class="kw">return</span> (<span class="kw">int</span>)Math.Ceiling((<span class="kw">float</span>)expression.Value);
+}
+</pre>
+
+<div class="callout">
+  <div class="callout-title">数据驱动的威力</div>
+  配置中写 <code>"攻击力数值 * 1.5 + 100"</code>，运行时通过表达式引擎解析，注入实时属性值。<br>
+  策划改伤害公式只需要改 Excel 配置字符串，不需要程序改代码。<br>
+  这就是为什么 <code>FloatNumeric.Value</code> 必须随时是最新的 — 表达式随时会读取它。
+</div>
+
+<h2 id="summary"><span class="num">2.8</span> 设计总结</h2>
+
+<div class="card-grid">
+  <div class="card">
+    <div class="card-title">核心不变量</div>
+    <div class="card-body"><code>FloatNumeric.Value</code> 永远等于公式计算结果。任何 Modifier 增删都<strong>立即</strong>触发重算。不存在「脏标记延迟计算」— 简单粗暴但正确。</div>
+  </div>
+  <div class="card green">
+    <div class="card-title">内存开销</div>
+    <div class="card-body">每个 FloatNumeric = 1 float + 4 个 List + 1 个 Dictionary。一个角色 8 个属性 ≈ 8 个 FloatNumeric 实例。对比 MOBA 中几十个角色，总计百级别实例，内存可忽略。</div>
+  </div>
+  <div class="card warn">
+    <div class="card-title">潜在优化点</div>
+    <div class="card-body">如果大量 Modifier 同时增删（如群体 Buff），每个 Add/Remove 都触发一次 Update。可考虑批量操作后统一 Update 一次。当前实现足够用。</div>
+  </div>
+</div>
+
+<div class="callout good">
+  <div class="callout-title">验收标准 — 读完本章后你应该能回答</div>
+  1. FloatModifier 为什么是 class 不是 struct？<br>
+  2. 手动计算：base=200, Add=30, PctAdd=40, FinalAdd=15, FinalPctAdd=10，最终值是多少？<br>
+  3. Buff 结束时如何精确回退属性修改？代码路径是什么？<br>
+  4. Add 和 FinalAdd 的区别在游戏逻辑中对应什么？<br>
+  5. 为什么 ModifierCollection 用增量更新而不是每次全量遍历？
+</div>
+
+<div class="callout">
+  <div class="callout-title">答案提示：第 2 题</div>
+  v1 = 200<br>
+  v2 = (200 + 30) × (100 + 40) / 100 = 230 × 1.4 = <strong>322</strong><br>
+  v3 = (322 + 15) × (100 + 10) / 100 = 337 × 1.1 = <strong>370.7</strong>
+</div>
+
+<div class="ch-nav">
+  <a href="ch01-ecsnode.html">
+    <span class="dir">← 上一章</span>
+    Ch01 EcsNode 框架底座
+  </a>
+  <a href="ch03-combat-entity.html">
+    <span class="dir">下一章 →</span>
+    Ch03 战斗实体
+  </a>
+</div>
+
+</main>
+</div>
+</body>
+</html>

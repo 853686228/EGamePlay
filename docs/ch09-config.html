@@ -1,0 +1,733 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ch09 — Configuration Pipeline 配置管线 | EGamePlay</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&family=Noto+Sans+SC:wght@400;600;700;900&family=JetBrains+Mono:wght@400;600&family=Playfair+Display:wght@900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="doc-layout">
+
+<!-- Sidebar -->
+<nav class="doc-sidebar">
+  <div class="nav-brand"><a href="index.html">EGamePlay</a></div>
+  <div class="nav-section">Chapters</div>
+  <ul class="nav-list">
+    <li><a href="ch01-ecsnode.html"><span class="ch-num">01</span> EcsNode 框架底座</a></li>
+    <li><a href="ch02-numeric.html"><span class="ch-num">02</span> 数值系统</a></li>
+    <li><a href="ch03-combat-entity.html"><span class="ch-num">03</span> 战斗实体</a></li>
+    <li><a href="ch04-ability.html"><span class="ch-num">04</span> 技能/Buff 核心</a></li>
+    <li><a href="ch05-effect.html"><span class="ch-num">05</span> 效果系统</a></li>
+    <li><a href="ch06-trigger.html"><span class="ch-num">06</span> 触发系统</a></li>
+    <li><a href="ch07-execution.html"><span class="ch-num">07</span> 执行时间轴</a></li>
+    <li><a href="ch08-action.html"><span class="ch-num">08</span> 行动系统</a></li>
+    <li><a class="active" href="ch09-config.html"><span class="ch-num">09</span> 配置管线</a></li>
+  </ul>
+  <div class="nav-section" style="margin-top:24px">本章目录</div>
+  <ul class="nav-list">
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#dual-track">双轨架构</a></li>
+    <li><a href="#ability-config">AbilityConfig 运行时配置</a></li>
+    <li><a href="#config-object">AbilityConfigObject</a></li>
+    <li><a href="#effect-configs">Effect 配置类</a></li>
+    <li><a href="#trigger-config">TriggerConfig</a></li>
+    <li><a href="#execution-object">ExecutionObject</a></li>
+    <li><a href="#pipeline">Excel → Runtime 管线</a></li>
+    <li><a href="#walkthrough">创建新技能流程</a></li>
+    <li><a href="#summary">设计总结</a></li>
+  </ul>
+</nav>
+
+<!-- Main Content -->
+<main class="doc-main">
+<div class="ch-header">
+  <div class="ch-kicker">Chapter 09</div>
+  <h1>Configuration Pipeline — <span class="accent">配置管线</span></h1>
+  <p class="ch-subtitle">策划如何配置一个技能？从 Excel 表格到运行时数据结构，从 ScriptableObject 到时间轴编辑器。本章解析 EGamePlay 的双轨配置架构：Excel 管参数，ScriptableObject 管结构。</p>
+</div>
+
+<!-- ===== 1. Overview ===== -->
+<h2 id="overview"><span class="num">9.1</span> 概述</h2>
+
+<div class="callout">
+  <div class="callout-title">核心问题</div>
+  一个 MOBA 技能的配置信息包含：<br>
+  • <strong>参数型数据</strong>：CD、伤害值、范围、持续时间 → 策划频繁调整<br>
+  • <strong>结构型数据</strong>：几个效果？什么触发条件？时间轴如何编排？ → 设计阶段确定<br><br>
+  用单一方案管理两类数据会出问题：<br>
+  • 纯 Excel → 无法表达嵌套结构（效果列表、触发条件树）<br>
+  • 纯 ScriptableObject → 策划改个 CD 要打开 Unity、找资源、改值、保存<br><br>
+  <strong>解决方案：双轨。</strong>
+</div>
+
+<!-- ===== 2. Dual Track ===== -->
+<h2 id="dual-track"><span class="num">9.2</span> 双轨架构</h2>
+
+<div class="card-grid">
+  <div class="card">
+    <div class="card-title">Excel — 参数轨</div>
+    <div class="card-body">
+      <strong>管什么：</strong>数值参数<br>
+      <strong>工具：</strong>Excel → 导出工具 → JSON → C# 类<br>
+      <strong>谁用：</strong>策划日常调参<br>
+      <strong>频率：</strong>每天多次<br>
+      <strong>产物：</strong><code>AbilityConfig</code> 类（运行时配置）
+    </div>
+  </div>
+  <div class="card green">
+    <div class="card-title">ScriptableObject — 结构轨</div>
+    <div class="card-body">
+      <strong>管什么：</strong>效果组合、触发逻辑、时间轴<br>
+      <strong>工具：</strong>Unity Inspector + 自定义编辑器<br>
+      <strong>谁用：</strong>技能设计师<br>
+      <strong>频率：</strong>设计阶段<br>
+      <strong>产物：</strong><code>AbilityConfigObject</code> + <code>ExecutionObject</code>
+    </div>
+  </div>
+</div>
+
+<h3>两轨如何关联</h3>
+<div class="flow flow-v">
+  <div class="flow-row">
+    <div class="flow-node blue">AbilityConfig (Excel)</div>
+    <span class="flow-label">Id = 1001, Name = "火球术", CD = 8s</span>
+  </div>
+  <div class="flow-arrow-d">↓ Id 关联</div>
+  <div class="flow-row">
+    <div class="flow-node green">AbilityConfigObject (SO)</div>
+    <span class="flow-label">Id = 1001, Effects = [DamageEffect, AddStatusEffect]</span>
+  </div>
+  <div class="flow-arrow-d">↓ ExecutionObject 引用</div>
+  <div class="flow-row">
+    <div class="flow-node purple">ExecutionObject (SO)</div>
+    <span class="flow-label">Timeline: 0.3s 播特效, 0.5s 发弹道, 0.8s 碰撞检测</span>
+  </div>
+</div>
+
+<div class="callout good">
+  <div class="callout-title">Id 是两轨的桥梁</div>
+  <code>AbilityConfig.Id</code> 和 <code>AbilityConfigObject.Id</code> 相同时，运行时自动关联。<br>
+  策划在 Excel 改 CD = 6s → 导出 → 运行时 AbilityConfig 更新 → Ability 读到新 CD。<br>
+  不需要碰 ScriptableObject，不需要打开 Unity。
+</div>
+
+<!-- ===== 3. AbilityConfig ===== -->
+<h2 id="ability-config"><span class="num">9.3</span> AbilityConfig — 运行时配置（Excel 产物）</h2>
+
+<p>由 Excel 导出工具自动生成的 C# 类。每一行 Excel 数据对应一个 <code>AbilityConfig</code> 实例。</p>
+
+<pre class="code"><span class="file-tag">AbilityConfig.cs — 自动生成的配置类</span>
+<span class="kw">namespace</span> EGamePlay.Combat
+{
+    <span class="cm">/// 技能/Buff 的基础参数配置（来自 Excel）</span>
+    <span class="kw">public class</span> <span class="tp">AbilityConfig</span>
+    {
+        <span class="cm">// ═══════════ 标识 ═══════════</span>
+        <span class="kw">public int</span> <span class="fn">Id</span>;              <span class="cm">// 唯一 ID（与 ConfigObject.Id 关联）</span>
+        <span class="kw">public string</span> <span class="fn">KeyName</span>;     <span class="cm">// 代码引用键名（如 "Skill_Fireball"）</span>
+        <span class="kw">public string</span> <span class="fn">Name</span>;        <span class="cm">// 显示名称（如 "火球术"）</span>
+
+        <span class="cm">// ═══════════ 类型 ═══════════</span>
+        <span class="kw">public string</span> <span class="fn">Type</span>;        <span class="cm">// "Skill" 或 "Buff"</span>
+
+        <span class="cm">// ═══════════ 目标规则 ═══════════</span>
+        <span class="kw">public string</span> <span class="fn">TargetGroup</span>;  <span class="cm">// "己方" / "敌方" / "自身"</span>
+        <span class="kw">public string</span> <span class="fn">TargetSelect</span>; <span class="cm">// "碰撞检测" / "条件指定" / "手动指定"</span>
+
+        <span class="cm">// ═══════════ 技能参数 ═══════════</span>
+        <span class="kw">public float</span> <span class="fn">Cooldown</span>;     <span class="cm">// 冷却时间（秒）</span>
+        <span class="kw">public float</span> <span class="fn">Duration</span>;     <span class="cm">// 持续时间（Buff 用，技能不填）</span>
+
+        <span class="cm">// ═══════════ Buff 专用 ═══════════</span>
+        <span class="kw">public string</span> <span class="fn">BuffType</span>;    <span class="cm">// Buff 类型分类（增益/减益/控制）</span>
+        <span class="kw">public int</span> <span class="fn">StatusSlot</span>;    <span class="cm">// 状态槽位（同槽位互斥/刷新）</span>
+        <span class="kw">public bool</span> <span class="fn">CanStack</span>;     <span class="cm">// 是否可叠加</span>
+    }
+}
+</pre>
+
+<h3>字段详解</h3>
+<table class="data">
+  <thead><tr><th>字段</th><th>类型</th><th>说明</th><th>Excel 示例</th></tr></thead>
+  <tbody>
+    <tr><td><code>Id</code></td><td>int</td><td>全局唯一标识，关联 ConfigObject</td><td>1001</td></tr>
+    <tr><td><code>KeyName</code></td><td>string</td><td>代码中引用的键</td><td>Skill_Fireball</td></tr>
+    <tr><td><code>Name</code></td><td>string</td><td>UI 显示名</td><td>火球术</td></tr>
+    <tr><td><code>Type</code></td><td>string</td><td>区分技能和 Buff</td><td>Skill / Buff</td></tr>
+    <tr><td><code>TargetGroup</code></td><td>string</td><td>目标阵营</td><td>敌方</td></tr>
+    <tr><td><code>TargetSelect</code></td><td>string</td><td>目标获取方式</td><td>碰撞检测</td></tr>
+    <tr><td><code>Cooldown</code></td><td>float</td><td>CD 秒数</td><td>8</td></tr>
+    <tr><td><code>Duration</code></td><td>float</td><td>Buff 持续秒数</td><td>5</td></tr>
+    <tr><td><code>BuffType</code></td><td>string</td><td>增益/减益/控制</td><td>减益</td></tr>
+    <tr><td><code>StatusSlot</code></td><td>int</td><td>互斥槽</td><td>1</td></tr>
+    <tr><td><code>CanStack</code></td><td>bool</td><td>是否可叠层</td><td>TRUE</td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <div class="callout-title">TargetSelect 的三种模式</div>
+  <strong>碰撞检测：</strong>由 AbilityItem（弹道/AOE 区域）的物理碰撞决定命中谁。如火球飞行中碰到的第一个敌人。<br>
+  <strong>条件指定：</strong>运行时按条件自动选取。如「范围内 HP 最低的友方」。<br>
+  <strong>手动指定：</strong>玩家主动选择目标。如指向性技能点击敌方英雄。
+</div>
+
+<!-- ===== 4. AbilityConfigObject ===== -->
+<h2 id="config-object"><span class="num">9.4</span> AbilityConfigObject — ScriptableObject 结构配置</h2>
+
+<p>AbilityConfigObject 是 Unity ScriptableObject，在 Inspector 中可视化编辑。它定义技能/Buff 的<strong>效果组合</strong>和<strong>触发逻辑</strong>。</p>
+
+<pre class="code"><span class="file-tag">AbilityConfigObject.cs — 核心结构</span>
+<span class="kw">namespace</span> EGamePlay.Combat
+{
+    <span class="cm">/// 技能的目标影响类型</span>
+    <span class="kw">public enum</span> <span class="tp">AffectTargetType</span>
+    {
+        <span class="fn">SelfTeam</span>,       <span class="cm">// 己方</span>
+        <span class="fn">EnemyTeam</span>,      <span class="cm">// 敌方</span>
+        <span class="fn">Self</span>,           <span class="cm">// 仅自身</span>
+    }
+
+    <span class="cm">/// 目标选取类型</span>
+    <span class="kw">public enum</span> <span class="tp">TargetSelectType</span>
+    {
+        <span class="fn">CollisionSelect</span>,    <span class="cm">// 碰撞检测</span>
+        <span class="fn">ConditionSelect</span>,    <span class="cm">// 条件指定</span>
+        <span class="fn">ManualSelect</span>,       <span class="cm">// 手动指定</span>
+    }
+
+    <span class="cm">/// 技能/Buff 的结构配置（ScriptableObject）</span>
+    [CreateAssetMenu(fileName = <span class="st">"AbilityConfig"</span>, menuName = <span class="st">"能力/能力配置"</span>)]
+    <span class="kw">public class</span> <span class="tp">AbilityConfigObject</span> : <span class="tp">ScriptableObject</span>
+    {
+        <span class="cm">// ═══════════ 关联 ID ═══════════</span>
+        <span class="kw">public int</span> <span class="fn">Id</span>;  <span class="cm">// 与 AbilityConfig.Id 一一对应</span>
+
+        <span class="cm">// ═══════════ 目标规则 ═══════════</span>
+        <span class="kw">public</span> <span class="tp">AffectTargetType</span> <span class="fn">AffectTargetType</span>;
+        <span class="kw">public</span> <span class="tp">TargetSelectType</span> <span class="fn">TargetSelectType</span>;
+
+        <span class="cm">// ═══════════ 效果列表 ═══════════</span>
+        <span class="cm">// 一个技能可以有多个效果（如：造成伤害 + 施加减速 + 回血）</span>
+        [SerializeReference]
+        <span class="hl"><span class="kw">public</span> <span class="tp">List</span>&lt;<span class="tp">Effect</span>&gt; <span class="fn">Effects</span> = <span class="kw">new</span>();</span>
+
+        <span class="cm">// ═══════════ 触发配置 ═══════════</span>
+        <span class="cm">// 定义每个效果在什么条件下触发</span>
+        <span class="kw">public</span> <span class="tp">List</span>&lt;<span class="tp">TriggerConfig</span>&gt; <span class="fn">TriggerActions</span> = <span class="kw">new</span>();
+
+        <span class="cm">// ═══════════ 执行体引用 ═══════════</span>
+        <span class="cm">// 指向 ExecutionObject（时间轴配置）</span>
+        <span class="kw">public</span> <span class="tp">ExecutionObject</span> <span class="fn">ExecutionObject</span>;
+
+        <span class="cm">// ═══════════ 参数字典 ═══════════</span>
+        <span class="cm">// 用于 Buff 参数传递（源技能 → Buff）</span>
+        <span class="kw">public</span> <span class="tp">Dictionary</span>&lt;<span class="tp">string</span>, <span class="tp">string</span>&gt; <span class="fn">Parameters</span>;
+    }
+}
+</pre>
+
+<div class="callout good">
+  <div class="callout-title">[SerializeReference] 的魔力</div>
+  <code>Effects</code> 列表用 <code>[SerializeReference]</code> 而不是 <code>[SerializeField]</code>：<br>
+  • 允许列表中存放 <code>Effect</code> 的不同子类（DamageEffect、CureEffect、...）<br>
+  • Unity Inspector 会显示每个效果的具体类型字段<br>
+  • 这实现了「一个技能多个不同类型的效果」的组合配置
+</div>
+
+<!-- ===== 5. Effect Configs ===== -->
+<h2 id="effect-configs"><span class="num">9.5</span> Effect 配置类</h2>
+
+<p>Effect 是 AbilityConfigObject 中效果列表的元素。基类 <code>Effect</code> 有 6 个子类，每个代表一种效果类型。</p>
+
+<h3>继承体系</h3>
+<pre class="code"><span class="file-tag">Effect 类层级</span>
+<span class="tp">Effect</span> <span class="cm">(abstract base)</span>
+├── <span class="tp">DamageEffect</span>            <span class="cm">// 造成伤害</span>
+├── <span class="tp">CureEffect</span>              <span class="cm">// 治疗恢复</span>
+├── <span class="tp">AddStatusEffect</span>         <span class="cm">// 施加 Buff/Debuff</span>
+├── <span class="tp">AttributeModifyEffect</span>   <span class="cm">// 属性修改</span>
+├── <span class="tp">ActionControlEffect</span>     <span class="cm">// 行动控制（眩晕/沉默）</span>
+└── <span class="tp">ShieldDefenseEffect</span>     <span class="cm">// 护盾</span>
+</pre>
+
+<h3>DamageEffect — 伤害效果配置</h3>
+<pre class="code"><span class="file-tag">DamageEffect.cs</span>
+<span class="kw">namespace</span> EGamePlay.Combat
+{
+    [Serializable]
+    <span class="kw">public class</span> <span class="tp">DamageEffect</span> : <span class="tp">Effect</span>
+    {
+        <span class="cm">/// 伤害值公式（字符串表达式）</span>
+        <span class="cm">/// 支持参数引用，如 "攻击力数值 * 1.5 + 100"</span>
+        <span class="cm">/// 运行时由 ExpressionHelper 解析，注入属性值</span>
+        <span class="hl"><span class="kw">public string</span> <span class="fn">DamageValueFormula</span>;</span>
+
+        <span class="cm">/// 伤害修饰器列表（可选）</span>
+        <span class="cm">/// 如：忽视防御百分比、附加元素伤害等</span>
+        <span class="kw">public</span> <span class="tp">List</span>&lt;<span class="tp">DamageDecorator</span>&gt; <span class="fn">Decorators</span> = <span class="kw">new</span>();
+    }
+}
+</pre>
+
+<h3>CureEffect — 治疗效果配置</h3>
+<pre class="code"><span class="file-tag">CureEffect.cs</span>
+<span class="kw">namespace</span> EGamePlay.Combat
+{
+    [Serializable]
+    <span class="kw">public class</span> <span class="tp">CureEffect</span> : <span class="tp">Effect</span>
+    {
+        <span class="cm">/// 治疗值公式（字符串表达式）</span>
+        <span class="cm">/// 如 "法术强度 * 0.8 + 200"</span>
+        <span class="kw">public string</span> <span class="fn">CureValueFormula</span>;
+    }
+}
+</pre>
+
+<h3>AddStatusEffect — 施加 Buff 效果配置</h3>
+<pre class="code"><span class="file-tag">AddStatusEffect.cs</span>
+<span class="kw">namespace</span> EGamePlay.Combat
+{
+    [Serializable]
+    <span class="kw">public class</span> <span class="tp">AddStatusEffect</span> : <span class="tp">Effect</span>
+    {
+        <span class="cm">/// 要施加的 Buff 的 ConfigObject 引用</span>
+        <span class="hl"><span class="kw">public</span> <span class="tp">AbilityConfigObject</span> <span class="fn">StatusConfigObject</span>;</span>
+
+        <span class="cm">/// Buff 持续时间（覆盖 AbilityConfig 中的 Duration）</span>
+        <span class="kw">public float</span> <span class="fn">Duration</span>;
+    }
+}
+</pre>
+
+<h3>AttributeModifyEffect — 属性修改效果配置</h3>
+<pre class="code"><span class="file-tag">AttributeModifyEffect.cs</span>
+<span class="kw">namespace</span> EGamePlay.Combat
+{
+    <span class="cm">/// 修改方式</span>
+    <span class="kw">public enum</span> <span class="tp">ModifyType</span>
+    {
+        <span class="fn">BaseValue</span>,    <span class="cm">// 直接修改基础值（永久）</span>
+        <span class="fn">Add</span>,          <span class="cm">// 加法修改器（可逆）</span>
+        <span class="fn">PercentAdd</span>,   <span class="cm">// 百分比修改器（可逆）</span>
+    }
+
+    [Serializable]
+    <span class="kw">public class</span> <span class="tp">AttributeModifyEffect</span> : <span class="tp">Effect</span>
+    {
+        <span class="cm">/// 修改哪个属性</span>
+        <span class="kw">public</span> <span class="tp">AttributeType</span> <span class="fn">AttributeType</span>;  <span class="cm">// Attack/Defense/MoveSpeed/...</span>
+
+        <span class="cm">/// 修改方式</span>
+        <span class="kw">public</span> <span class="tp">ModifyType</span> <span class="fn">ModifyType</span>;      <span class="cm">// BaseValue/Add/PercentAdd</span>
+
+        <span class="cm">/// 修改数值（或百分比值）</span>
+        <span class="cm">/// 如 "50" = +50攻击力, 或 "30" = +30%(PercentAdd)</span>
+        <span class="kw">public string</span> <span class="fn">NumericValue</span>;
+    }
+}
+</pre>
+
+<h3>ActionControlEffect — 行动控制效果配置</h3>
+<pre class="code"><span class="file-tag">ActionControlEffect.cs</span>
+<span class="kw">namespace</span> EGamePlay.Combat
+{
+    <span class="cm">/// 控制类型</span>
+    <span class="kw">public enum</span> <span class="tp">ActionControlType</span>
+    {
+        <span class="fn">Stun</span>,       <span class="cm">// 眩晕（无法移动/攻击/施法）</span>
+        <span class="fn">Silence</span>,    <span class="cm">// 沉默（无法施法）</span>
+        <span class="fn">Disarm</span>,     <span class="cm">// 缴械（无法普攻）</span>
+        <span class="fn">Root</span>,       <span class="cm">// 禁锢（无法移动）</span>
+        <span class="fn">Taunt</span>,      <span class="cm">// 嘲讽（强制攻击来源）</span>
+    }
+
+    [Serializable]
+    <span class="kw">public class</span> <span class="tp">ActionControlEffect</span> : <span class="tp">Effect</span>
+    {
+        <span class="cm">/// 控制类型</span>
+        <span class="kw">public</span> <span class="tp">ActionControlType</span> <span class="fn">ActionControlType</span>;
+    }
+}
+</pre>
+
+<h3>ShieldDefenseEffect — 护盾效果配置</h3>
+<pre class="code"><span class="file-tag">ShieldDefenseEffect.cs</span>
+<span class="kw">namespace</span> EGamePlay.Combat
+{
+    [Serializable]
+    <span class="kw">public class</span> <span class="tp">ShieldDefenseEffect</span> : <span class="tp">Effect</span>
+    {
+        <span class="cm">/// 护盾值（吸收伤害量）</span>
+        <span class="cm">/// 支持表达式，如 "最大生命值 * 0.15"</span>
+        <span class="kw">public string</span> <span class="fn">ShieldValue</span>;
+    }
+}
+</pre>
+
+<div class="callout warn">
+  <div class="callout-title">Effect 配置 vs Effect 实体 — 不要混淆</div>
+  <strong>配置层（本章）：</strong><code>DamageEffect</code> 是配置数据类，存在 ScriptableObject 中，策划编辑。<br>
+  <strong>运行时层（Ch05）：</strong><code>AbilityEffect</code> 是 EcsEntity，持有 <code>EffectDamageComponent</code>，被 System 驱动。<br><br>
+  关系：<code>AbilityEffect.EffectConfig = DamageEffect</code>（运行时实体引用配置数据）
+</div>
+
+<!-- ===== 6. TriggerConfig ===== -->
+<h2 id="trigger-config"><span class="num">9.6</span> TriggerConfig — 触发配置</h2>
+
+<p>TriggerConfig 定义效果在什么条件下执行。每个 TriggerConfig 关联一组 Effect，描述「什么时候」执行「哪些效果」。</p>
+
+<pre class="code"><span class="file-tag">TriggerConfig.cs — 完整结构</span>
+<span class="kw">namespace</span> EGamePlay.Combat
+{
+    <span class="cm">/// 触发方式</span>
+    <span class="kw">public enum</span> <span class="tp">TriggerType</span>
+    {
+        <span class="fn">AutoTrigger</span>,    <span class="cm">// 自动触发（由系统驱动）</span>
+        <span class="fn">ManualTrigger</span>,  <span class="cm">// 手动触发（由时间轴 Clip 驱动）</span>
+    }
+
+    <span class="cm">/// 自动触发的子类型</span>
+    <span class="kw">public enum</span> <span class="tp">AutoTriggerType</span>
+    {
+        <span class="fn">Instant</span>,    <span class="cm">// 立即（Ability 激活时）</span>
+        <span class="fn">Action</span>,     <span class="cm">// 行动点（某个 ActionPoint 触发时）</span>
+        <span class="fn">Condition</span>,  <span class="cm">// 条件（时间/状态/事件满足时）</span>
+    }
+
+    [Serializable]
+    <span class="kw">public class</span> <span class="tp">TriggerConfig</span>
+    {
+        <span class="cm">// ═══════════ 触发方式 ═══════════</span>
+        <span class="kw">public</span> <span class="tp">TriggerType</span> <span class="fn">TriggerType</span>;
+
+        <span class="cm">// ═══════════ 自动触发配置 ═══════════</span>
+        <span class="kw">public</span> <span class="tp">AutoTriggerType</span> <span class="fn">AutoTriggerType</span>;
+
+        <span class="cm">/// Action 触发时：在哪个行动点触发</span>
+        <span class="cm">/// 如 AfterReceiveApply = 受到伤害后触发</span>
+        <span class="kw">public</span> <span class="tp">ActionPointType</span> <span class="fn">ActionPointType</span>;
+
+        <span class="cm">/// Condition 触发时：条件类型</span>
+        <span class="cm">/// 如 WhenHPBelowPercent / WhenTimeInterval</span>
+        <span class="kw">public</span> <span class="tp">TimeStateEventType</span> <span class="fn">ConditionType</span>;
+
+        <span class="cm">// ═══════════ 条件参数 ═══════════</span>
+        <span class="cm">/// 状态检查列表</span>
+        <span class="cm">/// 如 ["HP < 30%", "HasBuff_Shield == false"]</span>
+        <span class="kw">public</span> <span class="tp">List</span>&lt;<span class="tp">string</span>&gt; <span class="fn">StateCheckList</span> = <span class="kw">new</span>();
+
+        <span class="cm">// ═══════════ 要触发的效果 ═══════════</span>
+        <span class="cm">/// 当触发条件满足时，执行哪些效果</span>
+        <span class="cm">/// 每个 TriggerEffect 包含效果索引 + 应用方式</span>
+        <span class="kw">public</span> <span class="tp">List</span>&lt;<span class="tp">TriggerEffect</span>&gt; <span class="fn">TriggerEffects</span> = <span class="kw">new</span>();
+    }
+
+    [Serializable]
+    <span class="kw">public class</span> <span class="tp">TriggerEffect</span>
+    {
+        <span class="cm">/// 效果在 Effects 列表中的索引</span>
+        <span class="kw">public int</span> <span class="fn">EffectIndex</span>;
+
+        <span class="cm">/// 效果应用方式</span>
+        <span class="kw">public</span> <span class="tp">EffectApplyType</span> <span class="fn">EffectApplyType</span>;
+    }
+
+    <span class="cm">/// 效果应用方式</span>
+    <span class="kw">public enum</span> <span class="tp">EffectApplyType</span>
+    {
+        <span class="fn">AllTargets</span>,     <span class="cm">// 对所有命中目标</span>
+        <span class="fn">Creator</span>,        <span class="cm">// 对施法者自身</span>
+        <span class="fn">FirstTarget</span>,    <span class="cm">// 仅对第一个目标</span>
+    }
+}
+</pre>
+
+<h3>触发类型决策树</h3>
+<table class="data">
+  <thead><tr><th>TriggerType</th><th>AutoTriggerType</th><th>何时触发</th><th>MOBA 实例</th></tr></thead>
+  <tbody>
+    <tr><td>AutoTrigger</td><td>Instant</td><td>Buff 挂载时立即</td><td>红 Buff 立即加攻速</td></tr>
+    <tr><td>AutoTrigger</td><td>Action</td><td>特定 ActionPoint 时</td><td>荆棘甲：受到伤害后反伤</td></tr>
+    <tr><td>AutoTrigger</td><td>Condition</td><td>状态/时间条件满足时</td><td>斩杀：目标 HP &lt; 30% 时额外伤害</td></tr>
+    <tr><td>ManualTrigger</td><td>—</td><td>时间轴 Clip 手动触发</td><td>火球术：0.5s 时发射弹道</td></tr>
+  </tbody>
+</table>
+
+<div class="callout good">
+  <div class="callout-title">TriggerConfig 是 Ch06 触发系统的配置源</div>
+  运行时，AbilitySystem.Awake 读取每个 TriggerConfig，创建对应的 AbilityTrigger 实体：<br>
+  • Instant → 直接执行效果<br>
+  • Action → 注册到 CombatEntity 的 ActionPoint 回调<br>
+  • Condition → 创建定时器/条件监听器<br>
+  • ManualTrigger → 由 ExecutionObject 的 Timeline Clip 触发
+</div>
+
+<!-- ===== 7. ExecutionObject ===== -->
+<h2 id="execution-object"><span class="num">9.7</span> ExecutionObject — 执行时间轴配置</h2>
+
+<p>ExecutionObject 是 ScriptableObject，定义技能释放的时间轴（参见 Ch07 详细解析）。这里总结其配置相关字段。</p>
+
+<pre class="code"><span class="file-tag">ExecutionObject.cs — 配置字段摘要</span>
+[CreateAssetMenu(fileName = <span class="st">"Execution"</span>, menuName = <span class="st">"能力/Execution"</span>)]
+<span class="kw">public class</span> <span class="tp">ExecutionObject</span> : <span class="tp">ScriptableObject</span>
+{
+    <span class="cm">// ═══════════ 时间轴总时长 ═══════════</span>
+    <span class="kw">public float</span> <span class="fn">TotalTime</span>;  <span class="cm">// 执行体总时长（秒）</span>
+
+    <span class="cm">// ═══════════ 时间轴片段 ═══════════</span>
+    <span class="cm">// 每个 Clip 在特定时间点执行特定操作</span>
+    [SerializeReference]
+    <span class="kw">public</span> <span class="tp">List</span>&lt;<span class="tp">ExecutionClip</span>&gt; <span class="fn">ExecutionClips</span> = <span class="kw">new</span>();
+
+    <span class="cm">// ═══════════ Clip 类型 ═══════════</span>
+    <span class="cm">// ExecutionClip 子类：</span>
+    <span class="cm">// • SpawnItemClip      — 生成弹道/AOE 区域</span>
+    <span class="cm">// • TriggerApplyClip   — 手动触发效果应用</span>
+    <span class="cm">// • PlayAnimationClip  — 播放动画</span>
+    <span class="cm">// • PlayEffectClip     — 播放特效</span>
+    <span class="cm">// • PlayAudioClip      — 播放音效</span>
+}
+</pre>
+
+<div class="callout">
+  <div class="callout-title">ExecutionObject 与 AbilityConfigObject 的关系</div>
+  <code>AbilityConfigObject.ExecutionObject</code> 引用了对应的 ExecutionObject。<br>
+  • <strong>AbilityConfigObject</strong> 定义「这个技能有什么效果」<br>
+  • <strong>ExecutionObject</strong> 定义「这些效果在什么时间以什么方式表现出来」<br><br>
+  同一个 AbilityConfigObject 可以搭配不同的 ExecutionObject（如普通施法 vs 蓄力施法的不同时间轴）。
+</div>
+
+<!-- ===== 8. Pipeline ===== -->
+<h2 id="pipeline"><span class="num">9.8</span> Excel → Runtime 管线</h2>
+
+<p>策划修改 Excel 后，数据如何流入运行时？</p>
+
+<h3>完整管线步骤</h3>
+<div class="flow flow-v">
+  <div class="flow-row">
+    <div class="flow-node blue">Step 1: 编辑 Excel</div>
+    <span class="flow-label">策划在 AbilityConfig.xlsx 中增/改行</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node purple">Step 2: 导出配置</div>
+    <span class="flow-label">Unity 菜单 → Tools/导出配置</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node cyan">Step 3: 生成 JSON</div>
+    <span class="flow-label">Excel → JSON 文件（Assets/Resources/Config/）</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node green">Step 4: 生成 C# 类</div>
+    <span class="flow-label">根据 Excel 表头自动生成 AbilityConfig.cs 等数据类</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node warn">Step 5: Runtime 加载</div>
+    <span class="flow-label">AppStatic.Config 启动时反序列化 JSON → Dictionary&lt;int, AbilityConfig&gt;</span>
+  </div>
+</div>
+
+<pre class="code"><span class="file-tag">运行时加载伪码</span>
+<span class="cm">// 游戏启动时</span>
+<span class="kw">public static class</span> <span class="tp">AppStatic</span>
+{
+    <span class="kw">public static</span> <span class="tp">ConfigManager</span> <span class="fn">Config</span>;
+
+    <span class="kw">public static void</span> <span class="fn">Init</span>()
+    {
+        Config = <span class="kw">new</span> <span class="tp">ConfigManager</span>();
+        <span class="cm">// 从 Resources/Config/ 加载所有 JSON</span>
+        <span class="cm">// 反序列化为对应的 Config 类实例</span>
+        <span class="cm">// 建立 Id → Config 的 Dictionary 索引</span>
+    }
+}
+
+<span class="cm">// 使用时</span>
+<span class="kw">var</span> config = AppStatic.Config.<span class="fn">Get</span>&lt;<span class="tp">AbilityConfig</span>&gt;(<span class="nm">1001</span>);
+<span class="cm">// → 返回 Id=1001 的火球术配置</span>
+<span class="cm">// config.Cooldown = 8f</span>
+<span class="cm">// config.Name = "火球术"</span>
+</pre>
+
+<div class="callout">
+  <div class="callout-title">为什么中间有 JSON 层？</div>
+  • <strong>版本控制友好：</strong>JSON 是文本，Git diff 可读<br>
+  • <strong>热更新支持：</strong>运行时可以从服务器下发 JSON 覆盖本地配置<br>
+  • <strong>跨平台：</strong>Excel 是 Windows 工具，JSON 所有平台都能读<br>
+  • <strong>测试方便：</strong>单元测试直接构造 JSON，不依赖 Excel
+</div>
+
+<!-- ===== 9. Walkthrough ===== -->
+<h2 id="walkthrough"><span class="num">9.9</span> 完整流程：创建一个新技能</h2>
+
+<p>假设我们要创建「寒冰箭」：指向性弹道，命中后造成伤害 + 施加减速 Debuff。</p>
+
+<h3>Step 1: 在 Excel 添加参数行</h3>
+<pre class="code"><span class="file-tag">AbilityConfig.xlsx — 新增行</span>
+| Id   | KeyName        | Name   | Type  | TargetGroup | TargetSelect | Cooldown | Duration |
+|------|----------------|--------|-------|-------------|--------------|----------|----------|
+| 1002 | Skill_IceArrow | 寒冰箭 | Skill | 敌方        | 手动指定     | 6        |          |
+</pre>
+
+<div class="callout">
+  <div class="callout-title">Step 1 关键点</div>
+  • <code>Id = 1002</code> — 全局唯一，后续 ConfigObject 要用同一个 ID<br>
+  • <code>TargetSelect = 手动指定</code> — 玩家需要选择一个敌方目标<br>
+  • <code>Duration</code> 留空 — 这是技能不是 Buff，不需要持续时间
+</div>
+
+<h3>Step 2: 创建 AbilityConfigObject</h3>
+<pre class="code"><span class="file-tag">Unity 操作</span>
+<span class="cm">// 1. 在 Project 窗口右键 → 创建 → 能力/能力配置</span>
+<span class="cm">// 2. 命名为 "Skill_IceArrow_Config"</span>
+<span class="cm">// 3. Inspector 中设置：</span>
+<span class="cm">//    Id = 1002（与 Excel 对应）</span>
+<span class="cm">//    AffectTargetType = EnemyTeam</span>
+<span class="cm">//    TargetSelectType = ManualSelect</span>
+</pre>
+
+<h3>Step 3: 配置效果列表</h3>
+<pre class="code"><span class="file-tag">Inspector 中 Effects 列表</span>
+<span class="cm">// 效果 0: DamageEffect</span>
+<span class="cm">//   DamageValueFormula = "攻击力数值 * 1.2 + 80"</span>
+<span class="cm">//   Decorators = []</span>
+<span class="cm">//</span>
+<span class="cm">// 效果 1: AddStatusEffect</span>
+<span class="cm">//   StatusConfigObject = [引用] Buff_Slow_Config (Id=2001)</span>
+<span class="cm">//   Duration = 3.0</span>
+</pre>
+
+<h3>Step 4: 配置触发逻辑</h3>
+<pre class="code"><span class="file-tag">Inspector 中 TriggerActions 列表</span>
+<span class="cm">// TriggerConfig 0:</span>
+<span class="cm">//   TriggerType = ManualTrigger</span>
+<span class="cm">//   TriggerEffects:</span>
+<span class="cm">//     [0] EffectIndex = 0, EffectApplyType = AllTargets  (伤害)</span>
+<span class="cm">//     [1] EffectIndex = 1, EffectApplyType = AllTargets  (加减速)</span>
+<span class="cm">//</span>
+<span class="cm">// → 含义：由时间轴的 TriggerApplyClip 手动触发时，对目标施加伤害+减速</span>
+</pre>
+
+<h3>Step 5: 创建 ExecutionObject 时间轴</h3>
+<pre class="code"><span class="file-tag">Unity 操作</span>
+<span class="cm">// 1. 右键 → 创建 → 能力/Execution</span>
+<span class="cm">// 2. 命名为 "Skill_IceArrow_Execution"</span>
+<span class="cm">// 3. TotalTime = 1.5</span>
+<span class="cm">// 4. 添加 Clips:</span>
+<span class="cm">//</span>
+<span class="cm">//    [0] PlayAnimationClip</span>
+<span class="cm">//        StartTime = 0.0</span>
+<span class="cm">//        AnimationName = "CastIceArrow"</span>
+<span class="cm">//</span>
+<span class="cm">//    [1] SpawnItemClip</span>
+<span class="cm">//        StartTime = 0.3       ← 动画到 0.3s 时发射弹道</span>
+<span class="cm">//        ItemType = Projectile</span>
+<span class="cm">//        Speed = 15</span>
+<span class="cm">//        PrefabPath = "Prefabs/IceArrow"</span>
+<span class="cm">//</span>
+<span class="cm">//    [2] TriggerApplyClip</span>
+<span class="cm">//        TriggerOnCollision = true  ← 弹道碰撞时触发效果</span>
+<span class="cm">//        TriggerConfigIndex = 0     ← 触发 TriggerConfig[0] 的效果</span>
+<span class="cm">//</span>
+<span class="cm">// 5. 将 ExecutionObject 拖到 AbilityConfigObject 的 ExecutionObject 字段</span>
+</pre>
+
+<h3>Step 6: 运行时挂载</h3>
+<pre class="code"><span class="file-tag">运行时代码</span>
+<span class="cm">// 在英雄创建时，将技能挂载到 CombatEntity</span>
+<span class="kw">var</span> configObject = Resources.Load&lt;<span class="tp">AbilityConfigObject</span>&gt;(<span class="st">"Skill_IceArrow_Config"</span>);
+<span class="hl">AbilitySystem.<span class="fn">Attach</span>(heroCombatEntity, configObject);</span>
+
+<span class="cm">// Attach 内部：</span>
+<span class="cm">// 1. AddChild&lt;Ability&gt;(x => x.ConfigObject = configObject)</span>
+<span class="cm">// 2. AbilitySystem.Awake 读取 Effects → 创建 AbilityEffect 子实体</span>
+<span class="cm">// 3. 读取 TriggerActions → 创建 AbilityTrigger 子实体</span>
+<span class="cm">// 4. ability.Init() → 完成初始化</span>
+</pre>
+
+<h3>完整运行时数据流</h3>
+<div class="flow flow-v">
+  <div class="flow-row">
+    <div class="flow-node blue">玩家点击敌方目标 + 释放技能按钮</div>
+    <span class="flow-label">输入层</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node purple">SpellAction 创建 (InputTarget = 选中的敌人)</div>
+    <span class="flow-label">Ch08 行动系统</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node cyan">AbilityExecution 创建 + 时间轴开始播放</div>
+    <span class="flow-label">Ch07 执行时间轴</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node green">0.3s: SpawnItemClip 生成冰箭弹道飞向目标</div>
+    <span class="flow-label">弹道飞行中...</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node warn">弹道碰撞目标 → CollisionAction → TriggerApplyClip</div>
+    <span class="flow-label">Ch06 触发系统</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node red">EffectAssignAction → DamageAction + AddBuffAction</div>
+    <span class="flow-label">Ch08 → 伤害 + 减速 Buff</span>
+  </div>
+</div>
+
+<!-- ===== Summary ===== -->
+<h2 id="summary"><span class="num">9.10</span> 设计总结</h2>
+
+<div class="card-grid">
+  <div class="card">
+    <div class="card-title">Excel = 快速迭代</div>
+    <div class="card-body">策划改数值不需要打开 Unity。Excel 编辑 → 一键导出 → 游戏内生效。数值平衡迭代效率极高。所有数值参数（CD、伤害系数、持续时间）都走这条路。</div>
+  </div>
+  <div class="card green">
+    <div class="card-title">ScriptableObject = 可视化设计</div>
+    <div class="card-body">效果组合、触发逻辑、时间轴编排 — 这些结构型数据在 Inspector 中可视化配置。技能设计师拖拖拽拽就能组合出复杂技能，不需要写代码。</div>
+  </div>
+  <div class="card warn">
+    <div class="card-title">Id 是唯一桥梁</div>
+    <div class="card-body">两轨通过 <code>Id</code> 字段关联。Excel 中的 <code>AbilityConfig.Id</code> 必须与 ScriptableObject 中的 <code>AbilityConfigObject.Id</code> 相同。这是唯一的耦合点 — 简单但有效。</div>
+  </div>
+  <div class="card bad">
+    <div class="card-title">已知局限</div>
+    <div class="card-body">• Id 关联靠人工保证一致性（无自动校验）<br>• Excel 导出是全量导出（改一行重新生成全部）<br>• ScriptableObject 无法热更新（需要 AssetBundle 方案）<br>• 无配置校验工具（填错公式只有运行时才报错）</div>
+  </div>
+</div>
+
+<div class="callout good">
+  <div class="callout-title">验收标准 — 读完本章后你应该能回答</div>
+  1. 为什么 EGamePlay 采用双轨架构而不是纯 Excel 或纯 ScriptableObject？<br>
+  2. AbilityConfig（Excel 产物）和 AbilityConfigObject（SO）的职责分别是什么？<br>
+  3. 一个 DamageEffect 的 DamageValueFormula 在运行时如何被解析和执行？<br>
+  4. TriggerConfig 的 AutoTrigger-Action 类型和 ManualTrigger 类型的本质区别是什么？<br>
+  5. 从策划「想加一个新技能」到「游戏内可以释放」，完整需要哪些步骤？每步产出什么？
+</div>
+
+<!-- Chapter Navigation -->
+<div class="ch-nav">
+  <a href="ch08-action.html">
+    <span class="dir">← 上一章</span>
+    Ch08 行动系统
+  </a>
+  <a href="index.html">
+    <span class="dir">返回 →</span>
+    目录
+  </a>
+</div>
+
+</main>
+</div>
+</body>
+</html>

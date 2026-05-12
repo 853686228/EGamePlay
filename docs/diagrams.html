@@ -1,0 +1,1181 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EGamePlay — 架构图表集 | Diagrams</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&family=Noto+Sans+SC:wght@400;600;700;900&family=JetBrains+Mono:wght@400;600&family=Playfair+Display:wght@900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      darkMode: true,
+      background: '#1a1b26',
+      primaryColor: '#292e42',
+      primaryTextColor: '#c0caf5',
+      primaryBorderColor: '#7aa2f7',
+      secondaryColor: '#343b58',
+      secondaryTextColor: '#a9b1d6',
+      tertiaryColor: '#24283b',
+      lineColor: '#565f89',
+      textColor: '#c0caf5',
+      mainBkg: '#292e42',
+      nodeBorder: '#7aa2f7',
+      clusterBkg: '#24283b',
+      clusterBorder: '#3b4261',
+      titleColor: '#7aa2f7',
+      edgeLabelBackground: '#24283b',
+      nodeTextColor: '#c0caf5',
+      actorBorder: '#7aa2f7',
+      actorBkg: '#292e42',
+      actorTextColor: '#c0caf5',
+      actorLineColor: '#565f89',
+      signalColor: '#c0caf5',
+      signalTextColor: '#c0caf5',
+      labelBoxBkgColor: '#292e42',
+      labelBoxBorderColor: '#3b4261',
+      labelTextColor: '#c0caf5',
+      loopTextColor: '#bb9af7',
+      noteBorderColor: '#e0af68',
+      noteBkgColor: '#343b58',
+      noteTextColor: '#c0caf5',
+      activationBorderColor: '#7aa2f7',
+      activationBkgColor: '#343b58',
+      sequenceNumberColor: '#1a1b26',
+      classText: '#c0caf5',
+      fillType0: '#292e42',
+      fillType1: '#343b58',
+      fillType2: '#24283b',
+    },
+    flowchart: { curve: 'basis', padding: 20 },
+    sequence: { mirrorActors: false, bottomMarginAdj: 10 },
+    class: { defaultRenderer: 'dagre-wrapper' }
+  });
+</script>
+<style>
+  .diagram-section { margin: 50px 0; }
+  .diagram-title {
+    font-size: 20px; font-weight: 900; color: #fff; margin-bottom: 8px;
+  }
+  .diagram-desc {
+    font-size: 14px; color: var(--text-2); margin-bottom: 20px; max-width: 700px;
+  }
+  /* Override: diagrams page uses full width, no sidebar constraint */
+  .doc-main {
+    margin-left: var(--nav-w); flex: 1; padding: 60px 48px 100px;
+    max-width: none;
+  }
+  .diagram-box {
+    background: var(--bg-soft); border: 1px solid var(--border); border-radius: 14px;
+    padding: 30px; margin: 16px 0; overflow: hidden;
+    position: relative;
+    /* resizable */
+    resize: both;
+    min-height: 300px;
+    min-width: 400px;
+  }
+  .diagram-box .mermaid {
+    display: flex; justify-content: center; width: 100%;
+    transition: transform 0.05s ease-out;
+    will-change: transform;
+  }
+  .diagram-box .mermaid svg {
+    max-width: none;
+    pointer-events: none; /* allow drag through SVG */
+  }
+  /* Viewport container for pan/zoom clipping */
+  .diagram-viewport {
+    width: 100%; height: 100%; min-height: 280px;
+    overflow: hidden; cursor: grab; position: relative;
+    border-radius: 8px;
+  }
+  .diagram-viewport:active { cursor: grabbing; }
+  /* Resize handle indicator */
+  .diagram-box::after {
+    content: '↔ 拖拽调整大小'; position: absolute; bottom: 8px; right: 14px;
+    font-size: 10px; color: var(--text-3); opacity: .5; pointer-events: none;
+    font-family: var(--font-sans);
+  }
+  /* Toolbar */
+  .diagram-toolbar {
+    display: flex; gap: 6px; margin-bottom: 12px; align-items: center;
+  }
+  .diagram-toolbar button {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text-2); padding: 5px 10px; font-size: 12px; font-weight: 700;
+    cursor: pointer; transition: all .15s; font-family: var(--font-mono);
+  }
+  .diagram-toolbar button:hover {
+    border-color: var(--accent); color: var(--accent); background: rgba(122,162,247,.08);
+  }
+  .diagram-toolbar .zoom-label {
+    font-size: 11px; color: var(--text-3); margin-left: 8px; font-family: var(--font-mono);
+  }
+  .diagram-toolbar .pan-hint {
+    font-size: 10px; color: var(--text-3); margin-left: auto; opacity: .7;
+    font-style: italic;
+  }
+  /* Fullscreen mode */
+  .diagram-box.fullscreen {
+    position: fixed; inset: 0; z-index: 9999; border-radius: 0;
+    resize: none; margin: 0; max-width: none; width: 100vw; height: 100vh;
+    overflow: auto; padding: 40px;
+  }
+  .diagram-box.fullscreen .diagram-toolbar {
+    position: sticky; top: 0; z-index: 10; background: var(--bg-soft);
+    padding: 8px 0; margin-bottom: 20px;
+  }
+  .diagram-legend {
+    margin-top: 12px; padding: 12px 16px; background: var(--surface);
+    border-radius: 8px; font-size: 12px; color: var(--text-2);
+    display: flex; gap: 20px; flex-wrap: wrap;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-dot { width: 12px; height: 12px; border-radius: 3px; }
+  .toc-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 12px; margin: 20px 0;
+  }
+  .toc-card {
+    padding: 14px 18px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; text-decoration: none; color: var(--text-2);
+    font-size: 13px; transition: all .2s;
+  }
+  .toc-card:hover { border-color: var(--accent); color: var(--accent); }
+  .toc-card .num { color: var(--accent); font-weight: 800; margin-right: 8px; }
+</style>
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="doc-layout">
+
+<nav class="doc-sidebar">
+  <div class="nav-brand"><a href="index.html">EGamePlay</a></div>
+  <div class="nav-section">Chapters</div>
+  <ul class="nav-list">
+    <li><a href="ch01-ecsnode.html"><span class="ch-num">01</span> EcsNode 框架底座</a></li>
+    <li><a href="ch02-numeric.html"><span class="ch-num">02</span> 数值系统</a></li>
+    <li><a href="ch03-combat-entity.html"><span class="ch-num">03</span> 战斗实体</a></li>
+    <li><a href="ch04-ability.html"><span class="ch-num">04</span> 技能/Buff 核心</a></li>
+    <li><a href="ch05-effect.html"><span class="ch-num">05</span> 效果系统</a></li>
+    <li><a href="ch06-trigger.html"><span class="ch-num">06</span> 触发系统</a></li>
+    <li><a href="ch07-execution.html"><span class="ch-num">07</span> 执行时间轴</a></li>
+    <li><a href="ch08-action.html"><span class="ch-num">08</span> 行动系统</a></li>
+    <li><a href="ch09-config.html"><span class="ch-num">09</span> 配置管线</a></li>
+  </ul>
+  <div class="nav-section" style="margin-top:24px">图表目录</div>
+  <ul class="nav-list">
+    <li><a href="#arch-layers">分层架构图</a></li>
+    <li><a href="#class-ecsnode">EcsNode 类图</a></li>
+    <li><a href="#class-combat">CombatEntity 类图</a></li>
+    <li><a href="#class-ability">Ability 组合关系</a></li>
+    <li><a href="#seq-spell">技能释放序列图</a></li>
+    <li><a href="#seq-damage">伤害计算序列图</a></li>
+    <li><a href="#seq-buff">Buff 生命周期</a></li>
+    <li><a href="#flow-effect">Effect 分发流程</a></li>
+    <li><a href="#flow-trigger">Trigger 判定流程</a></li>
+    <li><a href="#state-ability">Ability 状态机</a></li>
+    <li><a href="#flow-numeric">数值计算流程</a></li>
+    <li><a href="#flow-config">配置加载流程</a></li>
+    <li><a href="#class-action">Action 类型层级</a></li>
+    <li><a href="#flow-execution">时间轴执行流程</a></li>
+  </ul>
+</nav>
+
+<main class="doc-main">
+<div class="ch-header">
+  <div class="ch-kicker">Appendix · Diagrams</div>
+  <h1>架构 <span class="accent">图表集</span></h1>
+  <p class="ch-subtitle">14 张关键架构图表，涵盖类关系、执行序列、状态流转和数据流。配合各章节文字描述使用，快速建立全局认知。</p>
+</div>
+
+<div class="toc-grid">
+  <a href="#arch-layers" class="toc-card"><span class="num">01</span>分层架构全景</a>
+  <a href="#class-ecsnode" class="toc-card"><span class="num">02</span>EcsNode 类图</a>
+  <a href="#class-combat" class="toc-card"><span class="num">03</span>CombatEntity 组件图</a>
+  <a href="#class-ability" class="toc-card"><span class="num">04</span>Ability 组合关系</a>
+  <a href="#seq-spell" class="toc-card"><span class="num">05</span>技能释放序列</a>
+  <a href="#seq-damage" class="toc-card"><span class="num">06</span>伤害计算序列</a>
+  <a href="#seq-buff" class="toc-card"><span class="num">07</span>Buff 生命周期</a>
+  <a href="#flow-effect" class="toc-card"><span class="num">08</span>Effect 分发流程</a>
+  <a href="#flow-trigger" class="toc-card"><span class="num">09</span>Trigger 判定流程</a>
+  <a href="#state-ability" class="toc-card"><span class="num">10</span>Ability 状态机</a>
+  <a href="#flow-numeric" class="toc-card"><span class="num">11</span>数值计算流程</a>
+  <a href="#flow-config" class="toc-card"><span class="num">12</span>配置加载流程</a>
+  <a href="#class-action" class="toc-card"><span class="num">13</span>Action 类型层级</a>
+  <a href="#flow-execution" class="toc-card"><span class="num">14</span>时间轴执行流程</a>
+</div>
+
+<!-- ═══════════ DIAGRAM 1: Architecture Layers ═══════════ -->
+<div class="diagram-section" id="arch-layers">
+  <div class="diagram-title">01 · 分层架构全景</div>
+  <div class="diagram-desc">EGamePlay 的四层架构：配置层 → 模型层 → 系统层 → 视图层。数据自上而下流动，依赖自下而上。</div>
+  <div class="diagram-box">
+    <div class="mermaid">
+graph TB
+    subgraph CONFIG["⚙️ Configuration Layer"]
+        EXCEL[Excel 配置表<br/>AbilityConfig.xlsx]
+        SO_ABILITY[AbilityConfigObject<br/>ScriptableObject]
+        SO_EXEC[ExecutionObject<br/>ScriptableObject]
+    end
+
+    subgraph MODEL["📦 Model Layer (Pure Data)"]
+        CE[CombatEntity]
+        AB[Ability]
+        EF[AbilityEffect]
+        TR[AbilityTrigger]
+        FN[FloatNumeric]
+        ACT[Action Entities]
+    end
+
+    subgraph SYSTEM["🔧 System Layer (Logic)"]
+        ABS[AbilitySystem]
+        EFS[Effect*System]
+        TRS[Trigger*System]
+        ACTS[*ActionSystem]
+        EXES[ExecutionSystem]
+    end
+
+    subgraph VIEW["🎮 View Layer (Unity)"]
+        ANIM[Animation]
+        VFX[Particle/VFX]
+        AUDIO[Audio]
+        UI[UI Feedback]
+    end
+
+    EXCEL -->|JSON 导出| MODEL
+    SO_ABILITY -->|效果结构| MODEL
+    SO_EXEC -->|时间轴| MODEL
+
+    MODEL <-->|驱动| SYSTEM
+    SYSTEM -->|表现指令| VIEW
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ DIAGRAM 2: EcsNode Class Diagram ═══════════ -->
+<div class="diagram-section" id="class-ecsnode">
+  <div class="diagram-title">02 · EcsNode 核心类图</div>
+  <div class="diagram-desc">ECS 框架的核心类型关系。EcsEntity 持有 Components 和 Children，System 通过泛型绑定 Entity 类型。</div>
+  <div class="diagram-box">
+    <div class="mermaid">
+classDiagram
+    class EcsObject {
+        &lt;&lt;abstract&gt;&gt;
+        +bool IsDisposed
+        +Destroy()
+    }
+
+    class EcsEntity {
+        +long Id
+        +long InstanceId
+        +EcsEntity Parent
+        +Dictionary~long,EcsEntity~ Id2Children
+        +Dictionary~Type,EcsComponent~ Components
+        +bool Enable
+        +AddChild~T~() T
+        +AddComponent~T~() T
+        +GetComponent~T~() T
+        +GetParent~T~() T
+        +Dispatch~T~(Action)
+        +Change~T~(Action)
+    }
+
+    class EcsComponent {
+        +EcsEntity Entity
+        +bool Enable
+    }
+
+    class EcsNode {
+        +static EcsNode Instance
+        +List~IEcsSystem~ AllSystems
+        +Dictionary~Type,List~ EntityType2Systems
+        +RegisterSystems()
+        +RegisterDrives()
+        +DriveEntitySystems(entity, driveType)
+        +DriveComponentSystems(entity, comp, driveType)
+        +DriveEntityUpdate()
+        +NewInstanceId() long
+    }
+
+    class AEntitySystem~T~ {
+        &lt;&lt;abstract&gt;&gt;
+        +Type EntityType
+    }
+
+    class AComponentSystem~T,C~ {
+        &lt;&lt;abstract&gt;&gt;
+        +Type EntityType
+        +Type ComponentType
+    }
+
+    class EntityState~T~ {
+        &lt;&lt;struct&gt;&gt;
+        -T _entity
+        -long _instanceId
+        +operator T()
+    }
+
+    EcsObject <|-- EcsEntity
+    EcsObject <|-- EcsComponent
+    EcsEntity "1" *-- "*" EcsComponent : Components
+    EcsEntity "1" *-- "*" EcsEntity : Children
+    EcsNode "1" o-- "*" AEntitySystem : manages
+    EcsNode "1" o-- "*" AComponentSystem : manages
+    EntityState~T~ ..> EcsEntity : safe reference
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ DIAGRAM 3: CombatEntity ═══════════ -->
+<div class="diagram-section" id="class-combat">
+  <div class="diagram-title">03 · CombatEntity 组件组成图</div>
+  <div class="diagram-desc">CombatEntity 作为根实体，挂载的所有组件和持有的 Action Ability 接口。</div>
+  <div class="diagram-box">
+    <div class="mermaid">
+classDiagram
+    class CombatEntity {
+        +object Actor
+        +Vector3 Position
+        +float Rotation
+        +bool IsHero
+        +ActionControlType ActionControlType
+        +AbilityExecution SpellingExecution
+        ---
+        +IActionAbility SpellAbility
+        +IActionAbility DamageAbility
+        +IActionAbility CureAbility
+        +IActionAbility AddStatusAbility
+        +IActionAbility AttackAbility
+        +IActionAbility CollisionAbility
+        +IActionAbility EffectAssignAbility
+    }
+
+    class AttributeComponent {
+        +FloatNumeric MoveSpeed
+        +FloatNumeric HealthPoint
+        +FloatNumeric HealthPointMax
+        +FloatNumeric Attack
+        +FloatNumeric Defense
+        +FloatNumeric AbilityPower
+        +FloatNumeric SpellResistance
+        +FloatNumeric CriticalProbability
+    }
+
+    class AbilityComponent {
+        +Dictionary~long,Ability~ IdAbilities
+    }
+
+    class BuffComponent {
+        +List~Ability~ ActiveBuffs
+    }
+
+    class SpellComponent {
+        +CombatEntity Target
+        +Vector3 Direction
+    }
+
+    class BehaviourPointComponent {
+        +Dictionary~ActionPointType,List~ Observers
+    }
+
+    CombatEntity *-- AttributeComponent
+    CombatEntity *-- AbilityComponent
+    CombatEntity *-- BuffComponent
+    CombatEntity *-- SpellComponent
+    CombatEntity *-- BehaviourPointComponent
+    CombatEntity "1" *-- "*" Ability : Children
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ DIAGRAM 4: Ability Composition ═══════════ -->
+<div class="diagram-section" id="class-ability">
+  <div class="diagram-title">04 · Ability 组合关系图</div>
+  <div class="diagram-desc">Ability 统一了 Skill 和 Buff（IsBuff 标记区分）。每个 Ability 拥有多个 Effect 和 Trigger 子实体。</div>
+  <div class="diagram-box">
+    <div class="mermaid">
+classDiagram
+    class Ability {
+        +CombatEntity OwnerEntity
+        +AbilityConfig Config
+        +AbilityConfigObject ConfigObject
+        +ExecutionObject ExecutionObject
+        +bool Spelling
+        +GameTimer CooldownTimer
+        +bool IsBuff
+        +bool IsSkill
+        +List~AbilityEffect~ AbilityEffects
+        +List~AbilityTrigger~ AbilityTriggers
+    }
+
+    class AbilityEffect {
+        +Ability OwnerAbility
+        +CombatEntity OwnerEntity
+        +Effect EffectConfig
+        +string Name
+    }
+
+    class AbilityTrigger {
+        +Ability OwnerAbility
+        +CombatEntity OwnerEntity
+        +TriggerConfig TriggerConfig
+        +string ConditionParamValue
+    }
+
+    class EffectDamageComponent {
+        +DamageEffect DamageEffect
+        +string DamageValueFormula
+    }
+    class EffectCureComponent {
+        +CureEffect CureEffect
+        +string CureValueProperty
+    }
+    class EffectAddBuffComponent {
+        +AddStatusEffect AddStatusEffect
+        +float Duration
+    }
+    class EffectAttributeModifyComponent {
+        +AttributeModifyEffect AttributeModifyEffect
+        +FloatModifier AttributeModifier
+    }
+    class EffectActionControlComponent {
+        +ActionControlType ActionControlType
+    }
+    class EffectShieldDefenseComponent {
+        +ShieldDefenseEffect ShieldDefenseEffect
+    }
+
+    class BehaviourObserveComponent
+    class TimeStateObserveComponent {
+        +GameTimer Timer
+        +TimeStateEventType TimeStateEventType
+    }
+    class TriggerStateCheckComponent {
+        +Dictionary StateCheckMap
+    }
+
+    Ability "1" *-- "1..*" AbilityEffect : owns
+    Ability "1" *-- "0..*" AbilityTrigger : owns
+
+    AbilityEffect -- EffectDamageComponent : may have
+    AbilityEffect -- EffectCureComponent : may have
+    AbilityEffect -- EffectAddBuffComponent : may have
+    AbilityEffect -- EffectAttributeModifyComponent : may have
+    AbilityEffect -- EffectActionControlComponent : may have
+    AbilityEffect -- EffectShieldDefenseComponent : may have
+
+    AbilityTrigger -- BehaviourObserveComponent : may have
+    AbilityTrigger -- TimeStateObserveComponent : may have
+    AbilityTrigger -- TriggerStateCheckComponent : may have
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ DIAGRAM 5: Spell Sequence ═══════════ -->
+<div class="diagram-section" id="seq-spell">
+  <div class="diagram-title">05 · 技能释放完整序列图</div>
+  <div class="diagram-desc">从玩家按键到目标扣血的完整调用链。这是理解整个框架的核心图。</div>
+  <div class="diagram-box">
+    <div class="mermaid">
+sequenceDiagram
+    participant P as 玩家输入
+    participant SC as SpellComponent
+    participant SA as SpellAbility
+    participant SAS as SpellActionSystem
+    participant AE as AbilityExecution
+    participant CLIP as ExecuteClip
+    participant ITEM as 弹道 Item
+    participant EA as EffectAssignAction
+    participant EFS as EffectSystem
+    participant DA as DamageAction
+    participant DAS as DamageActionSystem
+    participant T as 目标 HP
+
+    P->>SC: 技能按键
+    SC->>SC: 检查冷却/状态
+    SC->>SA: TryMakeAction()
+    SA->>SAS: Execute(spellAction)
+    SAS->>AE: 创建 AbilityExecution
+    SAS->>AE: 加载 ExecutionObject
+    SAS->>AE: Init() 启动时间轴
+
+    loop 逐帧推进时间轴
+        AE->>CLIP: 检查当前时间的 Clip
+        Note over CLIP: Animation / Particle / Audio
+    end
+
+    AE->>CLIP: ActionEvent 到达触发时间
+    CLIP->>ITEM: 创建弹道飞行物
+    ITEM->>ITEM: 按 CollisionMoveType 移动
+    ITEM->>EA: 碰撞！创建 EffectAssignAction
+
+    EA->>EFS: TriggerApply(effectAssign)
+    EFS->>DA: DamageAbility.TryMakeAction()
+    DA->>DAS: Execute(damageAction)
+    DAS->>DAS: 计算伤害公式
+    DAS->>T: HP -= damage
+    DAS-->>P: 触发伤害数字表现
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ DIAGRAM 6: Damage Calculation ═══════════ -->
+<div class="diagram-section" id="seq-damage">
+  <div class="diagram-title">06 · 伤害计算详细序列图</div>
+  <div class="diagram-desc">DamageActionSystem 的 8 阶段管线中，伤害数值从公式到最终扣血的完整计算过程。</div>
+  <div class="diagram-box">
+    <div class="mermaid">
+sequenceDiagram
+    participant EAS as EffectAssignAction
+    participant EDS as EffectDamageSystem
+    participant DAB as DamageAbility
+    participant DAS as DamageActionSystem
+    participant ATTR_A as 攻击者 Attribute
+    participant ATTR_T as 目标 Attribute
+    participant HP as 目标 HP
+
+    EAS->>EDS: TriggerApply()
+    EDS->>DAB: TryMakeAction(out damageAction)
+    DAB-->>EDS: DamageAction 实例
+
+    EDS->>DAS: Execute(damageAction)
+
+    Note over DAS: Phase 1: BeforeExecuteAction
+    Note over DAS: Phase 2: BeforeSufferAction
+    Note over DAS: Phase 3: ActionCheckProcess ↓
+
+    DAS->>ATTR_A: 读取 Attack.Value
+    ATTR_A-->>DAS: atk = 180
+
+    alt DamageSource == Attack (普攻)
+        DAS->>ATTR_T: 读取 Defense.Value
+        ATTR_T-->>DAS: def = 50
+        DAS->>DAS: damage = atk * (atk/(atk+def))<br/>= 180 * (180/230) = 141
+    else DamageSource == Skill (技能)
+        DAS->>EDS: GetDamageValue(effect)
+        EDS->>EDS: 解析表达式 "攻击力数值*1.5+100"
+        EDS-->>DAS: damage = 370
+    end
+
+    DAS->>ATTR_A: 读取 CriticalProbability.Value
+    ATTR_A-->>DAS: critProb = 25%
+    DAS->>DAS: Roll 随机 0-100
+    alt Roll < 25 (暴击)
+        DAS->>DAS: damage *= 1.5
+    end
+
+    Note over DAS: Phase 6: ActionApply ↓
+    DAS->>HP: SetBase(currentHP - damage)
+    Note over DAS: Phase 7-8: After hooks
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ DIAGRAM 7: Buff Lifecycle ═══════════ -->
+<div class="diagram-section" id="seq-buff">
+  <div class="diagram-title">07 · Buff 完整生命周期序列图</div>
+  <div class="diagram-desc">从施加 Buff 到 Buff 到期自动移除的全过程，展示属性修改的添加与回退。</div>
+  <div class="diagram-box">
+    <div class="mermaid">
+sequenceDiagram
+    participant SRC as 施法者
+    participant EABS as EffectAddBuffSystem
+    participant ABS as AbilitySystem
+    participant TGT as 目标 CombatEntity
+    participant BUF as Buff (Ability)
+    participant EFF as Effect (AttributeModify)
+    participant ATTR as 目标 Attack
+    participant DUR as AbilityDurationSystem
+    participant BS as BuffSystem
+
+    SRC->>EABS: TriggerApply(effectAssign)
+    EABS->>ABS: Attach(target, buffConfigObject)
+
+    ABS->>TGT: AddChild&lt;Ability&gt;(IsBuff=true)
+    ABS->>BUF: Awake → 创建 Effects/Triggers
+    ABS->>BUF: AddComponent&lt;AbilityDurationComponent&gt;(5秒)
+    ABS->>BUF: Init()
+
+    Note over BUF: Enable = true 触发级联
+
+    BUF->>EFF: Enable = true
+    EFF->>ATTR: AddModifier(FinalPctAdd, +30%)
+    Note over ATTR: Attack: 180 → 234
+
+    loop 每帧 Update
+        DUR->>DUR: timer -= deltaTime
+    end
+
+    DUR->>DUR: timer <= 0，时间到！
+    DUR->>BS: Remove(target, buff)
+    BS->>BUF: Enable = false
+
+    BUF->>EFF: Enable = false (级联)
+    EFF->>ATTR: RemoveModifier(FinalPctAdd, +30%)
+    Note over ATTR: Attack: 234 → 180 (精确恢复)
+
+    BS->>ABS: EndAbility(buff)
+    ABS->>TGT: RemoveChild(buff)
+    Note over BUF: 整棵子树被销毁
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ DIAGRAM 8: Effect Dispatch Flow ═══════════ -->
+<div class="diagram-section" id="flow-effect">
+  <div class="diagram-title">08 · Effect 分发决策流程图</div>
+  <div class="diagram-desc">当 EffectAssignAction 到达 AbilityEffectSystem.TriggerApply 后，根据挂载的 Component 类型决定调用哪个 System。</div>
+  <div class="diagram-box">
+    <div class="mermaid">
+flowchart TD
+    START([EffectAssignAction 到达]) --> ITER[遍历 AbilityEffect.Components]
+
+    ITER --> CHK1{EffectDamageComponent?}
+    CHK1 -->|Yes| DMG[EffectDamageSystem.TriggerApply<br/>→ DamageAbility.TryMakeAction<br/>→ DamageActionSystem.Execute]
+    CHK1 -->|No| CHK2
+
+    CHK2{EffectCureComponent?}
+    CHK2 -->|Yes| CURE[EffectCureSystem.TriggerApply<br/>→ CureAbility.TryMakeAction<br/>→ CureActionSystem.Execute]
+    CHK2 -->|No| CHK3
+
+    CHK3{EffectAddBuffComponent?}
+    CHK3 -->|Yes| BUFF[EffectAddBuffSystem.TriggerApply<br/>→ AddStatusAbility.TryMakeAction<br/>→ AddBuffActionSystem.Execute]
+    CHK3 -->|No| CHK4
+
+    CHK4{EffectAttributeModifyComponent?}
+    CHK4 -->|Yes| ATTR[EffectAttributeSystem.TriggerApply<br/>→ component.Enable = true<br/>→ 添加 Modifier]
+    CHK4 -->|No| CHK5
+
+    CHK5{EffectActionControlComponent?}
+    CHK5 -->|Yes| CTRL[EffectActionControlSystem.TriggerApply<br/>→ component.Enable = true<br/>→ BuffSystem.OnBuffChanged]
+    CHK5 -->|No| CHK6
+
+    CHK6{EffectShieldDefenseComponent?}
+    CHK6 -->|Yes| SHIELD[EffectShieldSystem.TriggerApply<br/>→ target.AddComponent&lt;ShieldComponent&gt;]
+    CHK6 -->|No| DONE
+
+    DMG --> DONE([完成])
+    CURE --> DONE
+    BUFF --> DONE
+    ATTR --> DONE
+    CTRL --> DONE
+    SHIELD --> DONE
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ DIAGRAM 9: Trigger Flow ═══════════ -->
+<div class="diagram-section" id="flow-trigger">
+  <div class="diagram-title">09 · Trigger 判定决策流程图</div>
+  <div class="diagram-desc">当 Trigger 被激发后，经过目标决议、状态检查门控，最终创建 EffectAssignAction 的完整流程。</div>
+  <div class="diagram-box">
+    <div class="mermaid">
+flowchart TD
+    START([Trigger 被激发]) --> RESOLVE[目标决议]
+
+    RESOLVE --> T1{context.Target != null?}
+    T1 -->|Yes| USE_T[target = context.Target]
+    T1 -->|No| T2{context.TriggerSource != null?}
+    T2 -->|Yes| USE_S[target = context.TriggerSource]
+    T2 -->|No| USE_P[target = ParentEntity]
+
+    USE_T --> STATE_CHK
+    USE_S --> STATE_CHK
+    USE_P --> STATE_CHK
+
+    STATE_CHK{有 TriggerStateCheckComponent?}
+    STATE_CHK -->|No| PASS[跳过检查]
+    STATE_CHK -->|Yes| CHECK[遍历 StateCheckMap]
+
+    CHECK --> COND{每个条件}
+    COND -->|!前缀| INVERT[取反检查<br/>CheckWith() == true → 失败]
+    COND -->|正常| NORMAL[正向检查<br/>CheckWith() == false → 失败]
+
+    INVERT --> ALL_PASS{全部通过?}
+    NORMAL --> ALL_PASS
+
+    ALL_PASS -->|No| FAIL([不触发效果])
+    ALL_PASS -->|Yes| PASS
+
+    PASS --> ITER_EFF[遍历 TriggerEffects]
+    ITER_EFF --> MATCH{匹配 EffectApplyType}
+    MATCH -->|AllEffects| ALL[触发所有 Effect]
+    MATCH -->|Effect1/2/3| SPECIFIC[触发指定索引 Effect]
+
+    ALL --> CREATE[创建 EffectAssignAction]
+    SPECIFIC --> CREATE
+
+    CREATE --> EXEC[AssignActionSystem.Execute]
+    EXEC --> DONE([Effect 生效])
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ DIAGRAM 10: Ability State Machine ═══════════ -->
+<div class="diagram-section" id="state-ability">
+  <div class="diagram-title">10 · Ability 生命周期状态机</div>
+  <div class="diagram-desc">Ability 从创建到销毁经历的状态转换。注意 Enable/Disable 可以反复切换（如 Buff 暂停/恢复）。</div>
+  <div class="diagram-box">
+    <div class="mermaid">
+stateDiagram-v2
+    [*] --> Created : AddChild&lt;Ability&gt;()
+    Created --> Awaking : IAwake 触发
+    Awaking --> Initialized : Init() 调用
+    Initialized --> Active : Enable = true
+
+    Active --> Updating : IUpdate 每帧
+    Updating --> Active : 帧结束
+
+    Active --> Disabled : Enable = false
+    Disabled --> Active : Enable = true (重新激活)
+
+    Active --> Destroying : EndAbility() / 到期
+    Disabled --> Destroying : EndAbility()
+
+    Destroying --> [*] : IDestroy → 子树清理
+
+    note right of Active
+        Effects 和 Triggers 全部激活
+        属性 Modifier 生效
+        计时器运行
+    end note
+
+    note right of Disabled
+        Effects/Triggers 全部暂停
+        Modifier 移除（属性回退）
+        计时器暂停
+    end note
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ DIAGRAM 11: Numeric Calculation ═══════════ -->
+<div class="diagram-section" id="flow-numeric">
+  <div class="diagram-title">11 · 数值计算流程图</div>
+  <div class="diagram-desc">FloatNumeric 的四层计算流程。任何 Modifier 的增删都会触发完整重算链。</div>
+  <div class="diagram-box">
+    <div class="mermaid">
+flowchart LR
+    BASE[baseValue<br/>基础值] --> STEP1
+
+    subgraph STEP1["第一层: Add"]
+        ADD_MODS[Add Modifiers<br/>+20, +30, +10...]
+        ADD_TOTAL[TotalValue = 60]
+    end
+
+    STEP1 --> CALC1["v1 = base + add.Total<br/>= 100 + 60 = 160"]
+
+    CALC1 --> STEP2
+
+    subgraph STEP2["第二层: PctAdd"]
+        PCT_MODS[PctAdd Modifiers<br/>+50%, +10%...]
+        PCT_TOTAL[TotalValue = 60]
+    end
+
+    STEP2 --> CALC2["v2 = v1 × (100+pct)/100<br/>= 160 × 1.6 = 256"]
+
+    CALC2 --> STEP3
+
+    subgraph STEP3["第三层: FinalAdd"]
+        FADD_MODS[FinalAdd Modifiers<br/>+15...]
+        FADD_TOTAL[TotalValue = 15]
+    end
+
+    STEP3 --> CALC3["v3 = v2 + finalAdd.Total<br/>= 256 + 15 = 271"]
+
+    CALC3 --> STEP4
+
+    subgraph STEP4["第四层: FinalPctAdd"]
+        FPCT_MODS[FinalPctAdd Modifiers<br/>+20%...]
+        FPCT_TOTAL[TotalValue = 20]
+    end
+
+    STEP4 --> RESULT["Value = v3 × (100+fpct)/100<br/>= 271 × 1.2 = <b>325.2</b>"]
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ DIAGRAM 12: Config Loading ═══════════ -->
+<div class="diagram-section" id="flow-config">
+  <div class="diagram-title">12 · 配置加载流程图</div>
+  <div class="diagram-desc">从策划编辑 Excel 到运行时技能生效的完整配置管线。</div>
+  <div class="diagram-box">
+    <div class="mermaid">
+flowchart TD
+    subgraph EDIT["策划编辑阶段"]
+        EXCEL[📊 Excel 编辑<br/>AbilityConfig.xlsx]
+        UNITY_SO[🎮 Unity Inspector<br/>创建 AbilityConfigObject]
+        UNITY_EX[🎬 Unity Inspector<br/>创建 ExecutionObject]
+    end
+
+    subgraph EXPORT["导出阶段"]
+        TOOL[Tools/导出配置]
+        JSON[📄 JSON 文件]
+        CSHARP[📝 C# Config 类<br/>AbilityConfig.cs]
+    end
+
+    subgraph RUNTIME["运行时加载"]
+        LOAD[AppStatic.Config.Load]
+        ATTACH[AbilitySystem.Attach]
+        AWAKE[AbilitySystem.Awake]
+    end
+
+    subgraph RESULT["技能就绪"]
+        ABILITY[✅ Ability Entity<br/>Effects + Triggers 创建完毕]
+    end
+
+    EXCEL --> TOOL
+    TOOL --> JSON
+    TOOL --> CSHARP
+    JSON --> LOAD
+    CSHARP --> LOAD
+
+    UNITY_SO --> ATTACH
+    UNITY_EX --> AWAKE
+
+    LOAD --> ATTACH
+    ATTACH --> AWAKE
+    AWAKE --> ABILITY
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ DIAGRAM 13: Action Class Hierarchy ═══════════ -->
+<div class="diagram-section" id="class-action">
+  <div class="diagram-title">13 · Action 类型层级图</div>
+  <div class="diagram-desc">7 种 Action 实体都实现 IActionExecute 接口。每种 Action 由对应的 ActionAbility 工厂创建，由对应的 ActionSystem 执行。</div>
+  <div class="diagram-box">
+    <div class="mermaid">
+classDiagram
+    class IActionAbility {
+        &lt;&lt;interface&gt;&gt;
+        +TryMakeAction(out action) bool
+    }
+
+    class IActionExecute {
+        &lt;&lt;interface&gt;&gt;
+        +ActionType Type
+        +CombatEntity Creator
+        +EcsEntity Target
+        +EffectAssignAction SourceAssignAction
+    }
+
+    class SpellAction {
+        +EcsEntity InputTarget
+        +Vector3 InputPoint
+        +float InputDirection
+        +AbilityExecution Execution
+    }
+
+    class DamageAction {
+        +int DamageValue
+        +bool IsCritical
+        +DamageSource DamageSource
+    }
+
+    class CureAction {
+        +int CureValue
+    }
+
+    class AddBuffAction {
+        +AddStatusEffect AddStatusEffect
+        +Ability SourceAbility
+    }
+
+    class AttackAction {
+        +CombatEntity Creator
+    }
+
+    class CollisionAction {
+        +AbilityItem AbilityItem
+    }
+
+    class EffectAssignAction {
+        +AbilityEffect AbilityEffect
+        +EcsEntity AssignTarget
+        +Ability SourceAbility
+        +TriggerContext TriggerContext
+    }
+
+    IActionExecute <|.. SpellAction
+    IActionExecute <|.. DamageAction
+    IActionExecute <|.. CureAction
+    IActionExecute <|.. AddBuffAction
+    IActionExecute <|.. AttackAction
+    IActionExecute <|.. CollisionAction
+    IActionExecute <|.. EffectAssignAction
+
+    IActionAbility ..> IActionExecute : creates
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ DIAGRAM 14: Execution Timeline ═══════════ -->
+<div class="diagram-section" id="flow-execution">
+  <div class="diagram-title">14 · 时间轴执行流程图</div>
+  <div class="diagram-desc">AbilityExecution 逐帧推进时间轴，在各 Clip 时间点触发对应行为。ActionEvent 是连接表现层和逻辑层的桥梁。</div>
+  <div class="diagram-box">
+    <div class="mermaid">
+flowchart TD
+    START([AbilityExecution.Init]) --> LOOP
+
+    subgraph LOOP["每帧 Update"]
+        TIME[currentTime += deltaTime]
+        TIME --> CHECK{检查每个 ExecuteClip}
+
+        CHECK --> |StartTime 到达| TYPE{ClipType?}
+
+        TYPE -->|Animation| ANIM[播放动画片段]
+        TYPE -->|Audio| AUDIO[播放音效]
+        TYPE -->|ParticleEffect| VFX[生成粒子特效]
+        TYPE -->|ActionEvent| ACTION_EVT[处理逻辑事件]
+        TYPE -->|ItemExecute| ITEM[创建飞行物]
+
+        ACTION_EVT --> FIRE{FireType?}
+        FIRE -->|StartTrigger| IMMEDIATE[立即触发 EffectAssign]
+        FIRE -->|CollisionTrigger| WAIT_COL[等待弹道碰撞时触发]
+        FIRE -->|EndTrigger| WAIT_END[等待执行体结束时触发]
+
+        ITEM --> MOVE_TYPE{CollisionMoveType?}
+        MOVE_TYPE -->|FixedPosition| FIX[固定不动]
+        MOVE_TYPE -->|FollowOwner| FOLLOW_O[跟随施法者]
+        MOVE_TYPE -->|FollowTarget| FOLLOW_T[追踪目标]
+        MOVE_TYPE -->|SelectedDirection| DIR[沿方向直线]
+        MOVE_TYPE -->|PathFly| PATH[沿路径飞行]
+        MOVE_TYPE -->|Bezier| BEZ[贝塞尔曲线]
+    end
+
+    CHECK -->|EndTime 到达| CLIP_END[Clip 结束清理]
+    CHECK -->|TotalTime 到达| EXEC_END([执行体结束<br/>清理所有资源])
+    </div>
+  </div>
+</div>
+
+<!-- Footer -->
+<div style="margin-top:60px; padding-top:20px; border-top:1px solid var(--border); text-align:center; font-size:11px; color:var(--text-3); letter-spacing:.15em; text-transform:uppercase;">
+  EGamePlay Architecture Diagrams · Mermaid.js · Generated 2026.05.12
+</div>
+
+<div class="ch-nav">
+  <a href="index.html">
+    <span class="dir">← 返回</span>
+    目录
+  </a>
+  <a href="ch01-ecsnode.html">
+    <span class="dir">开始阅读 →</span>
+    Ch01 EcsNode 框架底座
+  </a>
+</div>
+
+</main>
+</div>
+
+<script>
+// ═══════════ Diagram Zoom/Pan/Fullscreen Controller ═══════════
+document.addEventListener('DOMContentLoaded', () => {
+  setTimeout(initDiagramControls, 1500);
+});
+
+function initDiagramControls() {
+  const boxes = document.querySelectorAll('.diagram-box');
+
+  boxes.forEach((box) => {
+    const mermaidEl = box.querySelector('.mermaid');
+    if (!mermaidEl) return;
+
+    // ─── State ───
+    let scale = 1;
+    let panX = 0, panY = 0;
+    let isDragging = false;
+    let startX, startY, startPanX, startPanY;
+    const MIN_SCALE = 0.2;
+    const MAX_SCALE = 4;
+
+    // ─── Wrap mermaid in a viewport container for pan clipping ───
+    const viewport = document.createElement('div');
+    viewport.className = 'diagram-viewport';
+    mermaidEl.parentNode.insertBefore(viewport, mermaidEl);
+    viewport.appendChild(mermaidEl);
+
+    // ─── Create toolbar ───
+    const toolbar = document.createElement('div');
+    toolbar.className = 'diagram-toolbar';
+    toolbar.innerHTML = `
+      <button class="btn-zoom-in" title="放大 (+)">＋</button>
+      <button class="btn-zoom-out" title="缩小 (-)">－</button>
+      <button class="btn-zoom-fit" title="适应宽度">适应</button>
+      <button class="btn-zoom-reset" title="重置位置和缩放">重置</button>
+      <button class="btn-fullscreen" title="全屏 (ESC退出)">⛶ 全屏</button>
+      <span class="zoom-label">100%</span>
+      <span class="pan-hint">拖拽移动 · Ctrl+滚轮缩放</span>
+    `;
+    box.insertBefore(toolbar, box.firstChild);
+
+    const zoomLabel = toolbar.querySelector('.zoom-label');
+
+    // ─── Apply transform ───
+    function applyTransform() {
+      mermaidEl.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+      mermaidEl.style.transformOrigin = '0 0';
+      zoomLabel.textContent = Math.round(scale * 100) + '%';
+    }
+
+    function setScale(s, centerX, centerY) {
+      const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, s));
+      if (centerX !== undefined && centerY !== undefined) {
+        // Zoom toward cursor position
+        const ratio = newScale / scale;
+        panX = centerX - (centerX - panX) * ratio;
+        panY = centerY - (centerY - panY) * ratio;
+      }
+      scale = newScale;
+      applyTransform();
+    }
+
+    function resetView() {
+      scale = 1; panX = 0; panY = 0;
+      applyTransform();
+    }
+
+    // ─── Toolbar buttons ───
+    toolbar.querySelector('.btn-zoom-in').addEventListener('click', () => {
+      setScale(scale + 0.2);
+    });
+    toolbar.querySelector('.btn-zoom-out').addEventListener('click', () => {
+      setScale(scale - 0.2);
+    });
+    toolbar.querySelector('.btn-zoom-fit').addEventListener('click', () => {
+      const svg = mermaidEl.querySelector('svg');
+      if (svg) {
+        const svgRect = svg.getBoundingClientRect();
+        const svgW = svgRect.width / scale;
+        const svgH = svgRect.height / scale;
+        const containerW = viewport.clientWidth - 20;
+        const containerH = viewport.clientHeight - 20;
+        const fitScale = Math.min(containerW / svgW, containerH / svgH, 2);
+        scale = fitScale;
+        panX = (containerW - svgW * fitScale) / 2;
+        panY = (containerH - svgH * fitScale) / 2;
+        applyTransform();
+      }
+    });
+    toolbar.querySelector('.btn-zoom-reset').addEventListener('click', resetView);
+
+    // ─── Fullscreen ───
+    const fsBtn = toolbar.querySelector('.btn-fullscreen');
+    fsBtn.addEventListener('click', () => toggleFullscreen(box, fsBtn));
+
+    // ─── DRAG PAN ───
+    viewport.addEventListener('mousedown', (e) => {
+      // Only left button, ignore if on toolbar
+      if (e.button !== 0) return;
+      if (e.target.closest('.diagram-toolbar')) return;
+
+      isDragging = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      startPanX = panX;
+      startPanY = panY;
+      viewport.style.cursor = 'grabbing';
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      panX = startPanX + dx;
+      panY = startPanY + dy;
+      applyTransform();
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (isDragging) {
+        isDragging = false;
+        viewport.style.cursor = 'grab';
+      }
+    });
+
+    // ─── TOUCH PAN (mobile) ───
+    let touchStartX, touchStartY, touchStartPanX, touchStartPanY;
+    viewport.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 1) {
+        touchStartX = e.touches[0].clientX;
+        touchStartY = e.touches[0].clientY;
+        touchStartPanX = panX;
+        touchStartPanY = panY;
+      }
+    }, { passive: true });
+
+    viewport.addEventListener('touchmove', (e) => {
+      if (e.touches.length === 1) {
+        const dx = e.touches[0].clientX - touchStartX;
+        const dy = e.touches[0].clientY - touchStartY;
+        panX = touchStartPanX + dx;
+        panY = touchStartPanY + dy;
+        applyTransform();
+        e.preventDefault();
+      }
+    }, { passive: false });
+
+    // ─── WHEEL ZOOM (toward cursor) ───
+    viewport.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const rect = viewport.getBoundingClientRect();
+      const cursorX = e.clientX - rect.left;
+      const cursorY = e.clientY - rect.top;
+      const delta = e.deltaY > 0 ? -0.15 : 0.15;
+      setScale(scale + delta, cursorX, cursorY);
+    }, { passive: false });
+
+    // ─── Double-click to reset or fullscreen ───
+    let lastClickTime = 0;
+    viewport.addEventListener('dblclick', (e) => {
+      if (e.target.closest('.diagram-toolbar')) return;
+      // If already zoomed/panned, reset; otherwise toggle fullscreen
+      if (Math.abs(scale - 1) > 0.05 || Math.abs(panX) > 5 || Math.abs(panY) > 5) {
+        resetView();
+      } else {
+        toggleFullscreen(box, fsBtn);
+      }
+    });
+
+    // ─── Initial fit ───
+    setTimeout(() => {
+      const svg = mermaidEl.querySelector('svg');
+      if (svg) {
+        const svgW = svg.getBoundingClientRect().width;
+        const containerW = viewport.clientWidth - 20;
+        if (svgW > containerW) {
+          scale = containerW / svgW;
+          applyTransform();
+        }
+      }
+    }, 300);
+  });
+}
+
+function toggleFullscreen(box, btn) {
+  box.classList.toggle('fullscreen');
+  if (box.classList.contains('fullscreen')) {
+    btn.textContent = '✕ 退出';
+    document.body.style.overflow = 'hidden';
+    box._escHandler = (e) => {
+      if (e.key === 'Escape') toggleFullscreen(box, btn);
+    };
+    document.addEventListener('keydown', box._escHandler);
+  } else {
+    btn.textContent = '⛶ 全屏';
+    document.body.style.overflow = '';
+    if (box._escHandler) {
+      document.removeEventListener('keydown', box._escHandler);
+    }
+  }
+}
+</script>
+</body>
+</html>

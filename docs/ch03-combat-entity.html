@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ch03 — CombatEntity 战斗实体 | EGamePlay</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&family=Noto+Sans+SC:wght@400;600;700;900&family=JetBrains+Mono:wght@400;600&family=Playfair+Display:wght@900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="doc-layout">
+
+<nav class="doc-sidebar">
+  <div class="nav-brand"><a href="index.html">EGamePlay</a></div>
+  <div class="nav-section">Chapters</div>
+  <ul class="nav-list">
+    <li><a href="ch01-ecsnode.html"><span class="ch-num">01</span> EcsNode 框架底座</a></li>
+    <li><a href="ch02-numeric.html"><span class="ch-num">02</span> 数值系统</a></li>
+    <li><a class="active" href="ch03-combat-entity.html"><span class="ch-num">03</span> 战斗实体</a></li>
+    <li><a href="ch04-ability.html"><span class="ch-num">04</span> 技能/Buff 核心</a></li>
+    <li><a href="ch05-effect.html"><span class="ch-num">05</span> 效果系统</a></li>
+    <li><a href="ch06-trigger.html"><span class="ch-num">06</span> 触发系统</a></li>
+    <li><a href="ch07-execution.html"><span class="ch-num">07</span> 执行时间轴</a></li>
+    <li><a href="ch08-action.html"><span class="ch-num">08</span> 行动系统</a></li>
+    <li><a href="ch09-config.html"><span class="ch-num">09</span> 配置管线</a></li>
+  </ul>
+  <div class="nav-section" style="margin-top:24px">本章目录</div>
+  <ul class="nav-list">
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#source">完整源码</a></li>
+    <li><a href="#components">挂载组件</a></li>
+    <li><a href="#actions">Action Ability 接口</a></li>
+    <li><a href="#hierarchy">实体层级关系</a></li>
+    <li><a href="#lifecycle">生命周期</a></li>
+    <li><a href="#summary">设计总结</a></li>
+  </ul>
+</nav>
+
+<main class="doc-main">
+<div class="ch-header">
+  <div class="ch-kicker">Chapter 03</div>
+  <h1>CombatEntity — <span class="accent">战斗实体</span></h1>
+  <p class="ch-subtitle">战斗中每个参与者（英雄、怪物、召唤物）的根实体。它本身不包含逻辑，只是组件的挂载点和子实体（Ability）的容器。理解 CombatEntity 的组成是理解整个技能释放链路的前提。</p>
+</div>
+
+<h2 id="overview"><span class="num">3.1</span> 概述</h2>
+
+<div class="callout">
+  <div class="callout-title">核心定位</div>
+  CombatEntity = <strong>数据容器 + 能力入口</strong>。<br>
+  • 作为容器：挂载 AttributeComponent（属性）、AbilityComponent（技能列表）、BuffComponent（Buff 列表）等<br>
+  • 作为入口：持有 SpellAbility、DamageAbility 等 Action Ability 接口，是触发任何战斗行为的唯一入口<br>
+  • 作为父节点：所有 Ability（技能/Buff）都是 CombatEntity 的子 Entity
+</div>
+
+<h2 id="source"><span class="num">3.2</span> 完整源码</h2>
+
+<pre class="code"><span class="file-tag">CombatEntity.cs</span>
+<span class="kw">using</span> System;
+<span class="kw">using</span> System.Collections.Generic;
+<span class="kw">using</span> UnityEngine;
+<span class="kw">using</span> ECS;
+<span class="kw">using</span> GameUtils;
+
+<span class="kw">namespace</span> EGamePlay.Combat
+{
+    <span class="kw">public interface</span> <span class="tp">IPosition</span>
+    {
+        <span class="tp">Vector3</span> Position { <span class="kw">get</span>; <span class="kw">set</span>; }
+        <span class="tp">float</span> Rotation { <span class="kw">get</span>; <span class="kw">set</span>; }
+    }
+
+    <span class="cm">/// 战斗实体 — 所有战斗参与者的根实体</span>
+    <span class="kw">public partial class</span> <span class="tp">CombatEntity</span> : <span class="tp">EcsEntity</span>, <span class="tp">IPosition</span>
+    {
+        <span class="cm">// ═══════════ 基础属性 ═══════════</span>
+        <span class="kw">public</span> <span class="tp">object</span> <span class="fn">Actor</span> { <span class="kw">get</span>; <span class="kw">set</span>; }           <span class="cm">// 关联的表现层对象</span>
+        <span class="kw">public</span> <span class="tp">Vector3</span> <span class="fn">Position</span> { <span class="kw">get</span>; <span class="kw">set</span>; }       <span class="cm">// 世界坐标</span>
+        <span class="kw">public</span> <span class="tp">float</span> <span class="fn">Rotation</span> { <span class="kw">get</span>; <span class="kw">set</span>; }         <span class="cm">// 朝向角度</span>
+        <span class="kw">public</span> <span class="tp">bool</span> <span class="fn">IsHero</span> { <span class="kw">get</span>; <span class="kw">set</span>; }            <span class="cm">// 英雄 vs 怪物标识</span>
+
+        <span class="cm">// ═══════════ 行动禁制状态 ═══════════</span>
+        <span class="kw">public</span> <span class="tp">ActionControlType</span> <span class="fn">ActionControlType</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        <span class="cm">// 标记当前受到的控制效果（眩晕/沉默/定身等）</span>
+
+        <span class="cm">// ═══════════ Action Ability 接口 ═══════════</span>
+        <span class="cm">// 每种战斗行为对应一个 Ability 工厂</span>
+        <span class="kw">public</span> <span class="tp">IActionAbility</span> <span class="fn">SpellAbility</span> { <span class="kw">get</span>; <span class="kw">set</span>; }         <span class="cm">// 施法</span>
+        <span class="kw">public</span> <span class="tp">IActionAbility</span> <span class="fn">DamageAbility</span> { <span class="kw">get</span>; <span class="kw">set</span>; }        <span class="cm">// 造成伤害</span>
+        <span class="kw">public</span> <span class="tp">IActionAbility</span> <span class="fn">CureAbility</span> { <span class="kw">get</span>; <span class="kw">set</span>; }          <span class="cm">// 治疗</span>
+        <span class="kw">public</span> <span class="tp">IActionAbility</span> <span class="fn">AddStatusAbility</span> { <span class="kw">get</span>; <span class="kw">set</span>; }     <span class="cm">// 施加状态</span>
+        <span class="kw">public</span> <span class="tp">IActionAbility</span> <span class="fn">AttackAbility</span> { <span class="kw">get</span>; <span class="kw">set</span>; }        <span class="cm">// 普通攻击</span>
+        <span class="kw">public</span> <span class="tp">IActionAbility</span> <span class="fn">CollisionAbility</span> { <span class="kw">get</span>; <span class="kw">set</span>; }     <span class="cm">// 碰撞处理</span>
+        <span class="kw">public</span> <span class="tp">IActionAbility</span> <span class="fn">EffectAssignAbility</span> { <span class="kw">get</span>; <span class="kw">set</span>; }  <span class="cm">// 效果分发</span>
+
+        <span class="cm">// ═══════════ 当前执行体 ═══════════</span>
+        <span class="kw">public</span> <span class="tp">AbilityExecution</span> <span class="fn">SpellingExecution</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        <span class="cm">// 当前正在执行的技能（用于判断是否正在施法、可否被打断）</span>
+    }
+}
+</pre>
+
+<h2 id="components"><span class="num">3.3</span> 挂载组件详解</h2>
+
+<table class="data">
+  <thead><tr><th>Component</th><th>职责</th><th>关键数据</th><th>创建时机</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>AttributeComponent</code></td>
+      <td>属性面板</td>
+      <td>HP、ATK、DEF、暴击率等 FloatNumeric 实例</td>
+      <td>CombatEntity 创建时</td>
+    </tr>
+    <tr>
+      <td><code>AbilityComponent</code></td>
+      <td>技能库</td>
+      <td><code>Dictionary&lt;long, Ability&gt; IdAbilities</code></td>
+      <td>CombatEntity 创建时</td>
+    </tr>
+    <tr>
+      <td><code>BuffComponent</code></td>
+      <td>Buff 库</td>
+      <td>按类型分组的活跃 Buff 列表</td>
+      <td>CombatEntity 创建时</td>
+    </tr>
+    <tr>
+      <td><code>SkillComponent</code></td>
+      <td>主动技能</td>
+      <td>可施放技能的子集合</td>
+      <td>CombatEntity 创建时</td>
+    </tr>
+    <tr>
+      <td><code>SpellComponent</code></td>
+      <td>施法管理</td>
+      <td>施法目标、方向、当前施法状态</td>
+      <td>CombatEntity 创建时</td>
+    </tr>
+    <tr>
+      <td><code>BehaviourPointComponent</code></td>
+      <td>行为点系统</td>
+      <td>行动点观察者列表（Trigger 订阅点）</td>
+      <td>CombatEntity 创建时</td>
+    </tr>
+    <tr>
+      <td><code>ActionAbilityComponent</code></td>
+      <td>Action 工厂注册</td>
+      <td>持有各 ActionAbility 的具体实现</td>
+      <td>CombatEntity 创建时</td>
+    </tr>
+  </tbody>
+</table>
+
+<pre class="code"><span class="file-tag">关键组件源码</span>
+<span class="cm">// AbilityComponent — 技能库</span>
+<span class="kw">public class</span> <span class="tp">AbilityComponent</span> : <span class="tp">EcsComponent</span>
+{
+    <span class="kw">public</span> <span class="tp">Dictionary</span>&lt;<span class="tp">long</span>, <span class="tp">Ability</span>&gt; <span class="fn">IdAbilities</span> { <span class="kw">get</span>; }
+        = <span class="kw">new</span> <span class="tp">Dictionary</span>&lt;<span class="tp">long</span>, <span class="tp">Ability</span>&gt;();
+}
+
+<span class="cm">// BuffComponent — Buff 库</span>
+<span class="kw">public class</span> <span class="tp">BuffComponent</span> : <span class="tp">EcsComponent</span>
+{
+    <span class="cm">// Buff 本质是 IsBuff=true 的 Ability，存储在这里便于快速查询</span>
+}
+
+<span class="cm">// ActionAbilityComponent — Action 工厂注册</span>
+<span class="kw">public class</span> <span class="tp">ActionAbilityComponent</span> : <span class="tp">EcsComponent</span>
+{
+    <span class="cm">// 持有 IActionAbility 的具体实现实例</span>
+}
+</pre>
+
+<h2 id="actions"><span class="num">3.4</span> Action Ability 接口</h2>
+
+<p>CombatEntity 通过 Action Ability 接口发起战斗行为。接口只有一个方法：<code>TryMakeAction</code> — 尝试创建一个 Action 实体。</p>
+
+<pre class="code"><span class="file-tag">IActionAbility.cs</span>
+<span class="kw">namespace</span> EGamePlay.Combat
+{
+    <span class="cm">/// Action 能力接口 — 工厂模式</span>
+    <span class="kw">public interface</span> <span class="tp">IActionAbility</span>
+    {
+        <span class="cm">/// 尝试创建一个 Action 实体</span>
+        <span class="cm">/// 返回 true 表示成功创建，out 参数为新的 Action</span>
+        <span class="kw">bool</span> <span class="fn">TryMakeAction</span>(<span class="kw">out</span> <span class="tp">IActionExecute</span> action);
+    }
+}
+</pre>
+
+<h3>Action Ability 使用模式</h3>
+<pre class="code"><span class="file-tag">使用示例</span>
+<span class="cm">// 在 EffectDamageSystem 中造成伤害：</span>
+<span class="kw">if</span> (entity.OwnerEntity.<span class="fn">DamageAbility</span>.TryMakeAction(<span class="kw">out var</span> damageAction))
+{
+    damageAction.Target = effectAssign.Target;
+    damageAction.DamageSource = DamageSource.Skill;
+    DamageActionSystem.<span class="fn">Execute</span>(damageAction);
+}
+
+<span class="cm">// 在 EffectAddBuffSystem 中施加 Buff：</span>
+<span class="kw">if</span> (entity.OwnerEntity.<span class="fn">AddStatusAbility</span>.TryMakeAction(<span class="kw">out var</span> action))
+{
+    action.Target = effectAssign.Target;
+    action.SourceAbility = effectAssign.SourceAbility;
+    AddBuffActionSystem.<span class="fn">Execute</span>(action);
+}
+
+<span class="cm">// 在 AbilityTriggerSystem 中分发效果：</span>
+<span class="kw">if</span> (entity.OwnerEntity.<span class="fn">EffectAssignAbility</span>.TryMakeAction(<span class="kw">out var</span> effectAssign))
+{
+    effectAssign.AbilityEffect = abilityEffect;
+    effectAssign.AssignTarget = target;
+    AssignActionSystem.<span class="fn">Execute</span>(effectAssign);
+}
+</pre>
+
+<div class="callout">
+  <div class="callout-title">为什么用工厂接口而不是直接 new</div>
+  <strong>解耦：</strong>Effect System 不需要知道 DamageAction 是怎么创建的（可能需要对象池、ID 分配等）。<br>
+  <strong>可拦截：</strong>TryMakeAction 可以返回 false（如沉默状态下不能施法）。<br>
+  <strong>可替换：</strong>不同的 CombatEntity 可以有不同的 DamageAbility 实现（如 Boss 有特殊伤害逻辑）。
+</div>
+
+<h2 id="hierarchy"><span class="num">3.5</span> 实体层级关系</h2>
+
+<p>CombatEntity 作为树根，所有战斗相关实体都是它的子孙节点：</p>
+
+<pre class="code"><span class="file-tag">Entity 树结构</span>
+<span class="tp">CombatEntity</span>                     <span class="cm">// 根节点 — 一个英雄/怪物</span>
+├── <span class="fn">Components</span>:
+│   ├── AttributeComponent       <span class="cm">// HP, ATK, DEF...</span>
+│   ├── AbilityComponent         <span class="cm">// 技能索引表</span>
+│   ├── BuffComponent            <span class="cm">// Buff 索引表</span>
+│   ├── SkillComponent           <span class="cm">// 主动技能子集</span>
+│   ├── SpellComponent           <span class="cm">// 施法状态</span>
+│   └── BehaviourPointComponent  <span class="cm">// 行为点观察者</span>
+│
+├── <span class="fn">Children</span> (Abilities):
+│   ├── <span class="tp">Ability</span> [技能1: 火球术]
+│   │   ├── <span class="tp">AbilityEffect</span> [效果: 200 伤害]
+│   │   │   └── EffectDamageComponent
+│   │   ├── <span class="tp">AbilityEffect</span> [效果: 施加燃烧]
+│   │   │   └── EffectAddBuffComponent
+│   │   └── <span class="tp">AbilityTrigger</span> [触发: 碰撞时]
+│   │       └── BehaviourObserveComponent
+│   │
+│   ├── <span class="tp">Ability</span> [技能2: 治疗术]
+│   │   └── ...
+│   │
+│   ├── <span class="tp">Ability</span> [Buff: 燃烧 DOT]  <span class="cm">// IsBuff = true</span>
+│   │   ├── <span class="tp">AbilityEffect</span> [效果: 每秒 50 伤害]
+│   │   │   └── EffectDamageComponent
+│   │   ├── <span class="tp">AbilityTrigger</span> [触发: 每 1 秒]
+│   │   │   └── TimeStateObserveComponent
+│   │   └── AbilityDurationComponent  <span class="cm">// 5 秒后自动移除</span>
+│   │
+│   └── <span class="tp">Ability</span> [被动: 反伤]
+│       ├── <span class="tp">AbilityEffect</span> [效果: 反弹 10% 伤害]
+│       └── <span class="tp">AbilityTrigger</span> [触发: 受伤时]
+│           └── BehaviourObserveComponent
+│
+└── <span class="fn">SpellingExecution</span>:
+    └── <span class="tp">AbilityExecution</span> [当前正在释放的技能]  <span class="cm">// 临时子实体</span>
+</pre>
+
+<div class="callout good">
+  <div class="callout-title">层级 = 所有权 = 生命周期</div>
+  当 CombatEntity 被销毁（角色死亡）时，<code>EcsObject.Destroy(entity)</code> 会<strong>递归销毁整棵子树</strong>：<br>
+  所有 Ability → 所有 Effect/Trigger → 所有 Component → 自动清理<br><br>
+  Buff 同理：当 Buff 到期（AbilityDurationSystem 触发），调用 <code>BuffSystem.Remove()</code> 删除该 Ability 子节点，其所有 Effect/Trigger 自动跟着清理。<strong>零手动管理。</strong>
+</div>
+
+<h2 id="lifecycle"><span class="num">3.6</span> 创建与初始化</h2>
+
+<pre class="code"><span class="file-tag">CombatEntity 创建流程（伪代码）</span>
+<span class="cm">// 在 CombatEntitySystem.Awake 中：</span>
+<span class="kw">public void</span> <span class="fn">Awake</span>(<span class="tp">CombatEntity</span> entity)
+{
+    <span class="cm">// 1. 添加核心组件</span>
+    entity.AddComponent&lt;<span class="tp">AttributeComponent</span>&gt;();
+    entity.AddComponent&lt;<span class="tp">AbilityComponent</span>&gt;();
+    entity.AddComponent&lt;<span class="tp">BuffComponent</span>&gt;();
+    entity.AddComponent&lt;<span class="tp">SkillComponent</span>&gt;();
+    entity.AddComponent&lt;<span class="tp">SpellComponent</span>&gt;();
+    entity.AddComponent&lt;<span class="tp">BehaviourPointComponent</span>&gt;();
+
+    <span class="cm">// 2. 初始化 Action Ability 接口</span>
+    entity.SpellAbility = <span class="kw">new</span> <span class="tp">SpellActionAbility</span>(entity);
+    entity.DamageAbility = <span class="kw">new</span> <span class="tp">DamageActionAbility</span>(entity);
+    entity.CureAbility = <span class="kw">new</span> <span class="tp">CureActionAbility</span>(entity);
+    entity.AddStatusAbility = <span class="kw">new</span> <span class="tp">AddBuffActionAbility</span>(entity);
+    entity.AttackAbility = <span class="kw">new</span> <span class="tp">AttackActionAbility</span>(entity);
+    entity.CollisionAbility = <span class="kw">new</span> <span class="tp">CollisionActionAbility</span>(entity);
+    entity.EffectAssignAbility = <span class="kw">new</span> <span class="tp">EffectAssignActionAbility</span>(entity);
+
+    <span class="cm">// 3. 初始化属性基础值（从配置加载）</span>
+    <span class="kw">var</span> attr = entity.GetComponent&lt;<span class="tp">AttributeComponent</span>&gt;();
+    NumericSystem.SetBase(attr.HealthPointMax, <span class="nm">1000</span>);
+    NumericSystem.SetBase(attr.HealthPoint, <span class="nm">1000</span>);
+    NumericSystem.SetBase(attr.Attack, <span class="nm">100</span>);
+    NumericSystem.SetBase(attr.Defense, <span class="nm">50</span>);
+    <span class="cm">// ...</span>
+
+    <span class="cm">// 4. 挂载初始技能</span>
+    <span class="kw">foreach</span> (<span class="kw">var</span> skillConfig <span class="kw">in</span> heroConfig.Skills)
+    {
+        AbilitySystem.Attach(entity, skillConfig);
+    }
+}
+</pre>
+
+<h2 id="summary"><span class="num">3.7</span> 设计总结</h2>
+
+<div class="card-grid">
+  <div class="card">
+    <div class="card-title">CombatEntity 不做逻辑</div>
+    <div class="card-body">它只有属性声明，<strong>没有方法</strong>。所有行为都通过 Action Ability 接口代理到对应的 System。这保证了数据与逻辑的分离。</div>
+  </div>
+  <div class="card green">
+    <div class="card-title">partial class 扩展</div>
+    <div class="card-body">CombatEntity 声明为 <code>partial class</code>，允许不同模块在不修改原文件的情况下扩展属性。这在大型项目多人协作中很有用。</div>
+  </div>
+  <div class="card warn">
+    <div class="card-title">Position 接口</div>
+    <div class="card-body">实现 <code>IPosition</code> 接口让碰撞/移动系统能以统一方式访问位置信息。Position/Rotation 是逻辑层坐标，由 ViewSystem 同步到 Unity Transform。</div>
+  </div>
+</div>
+
+<div class="callout good">
+  <div class="callout-title">验收标准</div>
+  1. CombatEntity 的 Children 里存的是什么？<br>
+  2. DamageAbility.TryMakeAction() 做了什么？谁调用它？<br>
+  3. 一个角色死亡时，它身上的 Buff 如何被清理？<br>
+  4. AbilityComponent 和 BuffComponent 存的都是 Ability，为什么要分两个 Component？<br>
+  5. ActionControlType 在哪里被设置？被谁读取？
+</div>
+
+<div class="ch-nav">
+  <a href="ch02-numeric.html">
+    <span class="dir">← 上一章</span>
+    Ch02 数值系统
+  </a>
+  <a href="ch04-ability.html">
+    <span class="dir">下一章 →</span>
+    Ch04 技能/Buff 核心
+  </a>
+</div>
+
+</main>
+</div>
+</body>
+</html>

@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ch05 — AbilityEffect 效果系统 | EGamePlay</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&family=Noto+Sans+SC:wght@400;600;700;900&family=JetBrains+Mono:wght@400;600&family=Playfair+Display:wght@900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="doc-layout">
+
+<!-- Sidebar -->
+<nav class="doc-sidebar">
+  <div class="nav-brand"><a href="index.html">EGamePlay</a></div>
+  <div class="nav-section">Chapters</div>
+  <ul class="nav-list">
+    <li><a href="ch01-ecsnode.html"><span class="ch-num">01</span> EcsNode 框架底座</a></li>
+    <li><a href="ch02-numeric.html"><span class="ch-num">02</span> 数值系统</a></li>
+    <li><a href="ch03-combat-entity.html"><span class="ch-num">03</span> 战斗实体</a></li>
+    <li><a href="ch04-ability.html"><span class="ch-num">04</span> 技能/Buff 核心</a></li>
+    <li><a class="active" href="ch05-effect.html"><span class="ch-num">05</span> 效果系统</a></li>
+    <li><a href="ch06-trigger.html"><span class="ch-num">06</span> 触发系统</a></li>
+    <li><a href="ch07-execution.html"><span class="ch-num">07</span> 执行时间轴</a></li>
+    <li><a href="ch08-action.html"><span class="ch-num">08</span> 行动系统</a></li>
+    <li><a href="ch09-config.html"><span class="ch-num">09</span> 配置管线</a></li>
+  </ul>
+  <div class="nav-section" style="margin-top:24px">本章目录</div>
+  <ul class="nav-list">
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#entity">AbilityEffect 实体</a></li>
+    <li><a href="#create">Create 工厂方法</a></li>
+    <li><a href="#trigger-apply">TriggerApply 分发</a></li>
+    <li><a href="#damage">EffectDamageSystem</a></li>
+    <li><a href="#cure">EffectCureSystem</a></li>
+    <li><a href="#addbuff">EffectAddBuffSystem</a></li>
+    <li><a href="#attribute">EffectAttributeSystem</a></li>
+    <li><a href="#actioncontrol">EffectActionControlSystem</a></li>
+    <li><a href="#shield">EffectShieldSystem</a></li>
+    <li><a href="#decorator">EffectDecoratorSystem</a></li>
+    <li><a href="#conversion">Effect → Action 转换</a></li>
+    <li><a href="#summary">设计总结</a></li>
+  </ul>
+</nav>
+
+<!-- Main Content -->
+<main class="doc-main">
+<div class="ch-header">
+  <div class="ch-kicker">Chapter 05</div>
+  <h1>AbilityEffect — <span class="accent">效果系统</span></h1>
+  <p class="ch-subtitle">Effect 是 Ability 的「做什么」。一个技能/Buff 的实际效果——伤害、治疗、加 Buff、修改属性、控制行为、护盾——全部通过 AbilityEffect 子实体 + 对应 Component + System 来实现。</p>
+</div>
+
+<!-- ===== 1. Overview ===== -->
+<h2 id="overview"><span class="num">5.1</span> 概述</h2>
+
+<div class="callout">
+  <div class="callout-title">核心架构</div>
+  AbilityEffect 是一个 Entity，挂载在 Ability 下。它通过 <strong>组件组合</strong> 声明自己的类型：<br>
+  • 挂了 <code>EffectDamageComponent</code> → 这是一个伤害效果<br>
+  • 挂了 <code>EffectCureComponent</code> → 这是一个治疗效果<br>
+  • 挂了 <code>EffectAddBuffComponent</code> → 这是一个施加 Buff 效果<br><br>
+  每种 Component 有对应的 System 处理具体逻辑。Effect 本身不包含任何业务代码。<br><br>
+  <strong>关键模式：Effect 是配置声明，Action 是运行时执行。</strong> Effect 描述「能造成什么」，Action 是「真正造成了什么」。
+</div>
+
+<div class="section-label">文件位置</div>
+<pre class="code"><span class="file-tag">目录结构</span>
+Assets/App.Model/.../com.model.egameplay/Ability/AbilityEffect/
+├── AbilityEffect.cs                              <span class="cm">// 实体定义（28行）</span>
+├── EffectDamageReduceWithTargetCountComponent.cs  <span class="cm">// 装饰器组件</span>
+└── [各种 Component 定义...]
+
+Assets/App.System/.../com.system.egameplay/Ability/AbilityEffect/
+├── AbilityEffectSystem.cs       <span class="cm">// 工厂 + 分发（77行）</span>
+├── EffectDamageSystem.cs        <span class="cm">// 伤害（47行）</span>
+├── EffectCureSystem.cs          <span class="cm">// 治疗（45行）</span>
+├── EffectAddBuffSystem.cs       <span class="cm">// 施加状态（43行）</span>
+├── EffectAttributeSystem.cs     <span class="cm">// 属性修改（70行）</span>
+├── EffectActionControlSystem.cs <span class="cm">// 行为控制（35行）</span>
+├── EffectShieldSystem.cs        <span class="cm">// 护盾（23行）</span>
+└── EffectDecoratorSystem.cs     <span class="cm">// 装饰器（27行）</span>
+</pre>
+
+<!-- ===== 2. Entity ===== -->
+<h2 id="entity"><span class="num">5.2</span> AbilityEffect 实体</h2>
+
+<pre class="code"><span class="file-tag">AbilityEffect.cs — 完整源码</span>
+<span class="kw">namespace</span> EGamePlay.Combat
+{
+    <span class="kw">public struct</span> <span class="tp">TriggerContext</span>
+    {
+        <span class="kw">public</span> <span class="tp">AbilityTrigger</span> <span class="fn">AbilityTrigger</span>;   <span class="cm">// 触发此效果的 Trigger</span>
+        <span class="kw">public</span> <span class="tp">EcsEntity</span> <span class="fn">TriggerSource</span>;        <span class="cm">// 触发源</span>
+        <span class="kw">public</span> <span class="tp">AbilityItem</span> <span class="fn">AbilityItem</span>;        <span class="cm">// 技能投射物（如子弹）</span>
+        <span class="kw">public</span> <span class="tp">EcsEntity</span> <span class="fn">Target</span>;              <span class="cm">// 效果目标</span>
+    }
+
+    <span class="cm">/// 能力效果，如伤害、治疗、施加状态等</span>
+    <span class="kw">public partial class</span> <span class="tp">AbilityEffect</span> : <span class="tp">EcsEntity</span>
+    {
+        <span class="kw">public string</span> <span class="fn">Name</span> { <span class="kw">get</span>; <span class="kw">set</span>; }
+        <span class="kw">public</span> <span class="tp">Ability</span> <span class="fn">OwnerAbility</span> => GetParent&lt;<span class="tp">Ability</span>&gt;();
+        <span class="kw">public</span> <span class="tp">CombatEntity</span> <span class="fn">OwnerEntity</span> => OwnerAbility.OwnerEntity;
+        <span class="kw">public</span> <span class="tp">EcsEntity</span> <span class="fn">ParentEntity</span> => OwnerAbility.ParentEntity;
+        <span class="kw">public</span> <span class="tp">Effect</span> <span class="fn">EffectConfig</span> { <span class="kw">get</span>; <span class="kw">set</span>; }  <span class="cm">// 效果配置基类引用</span>
+    }
+}
+</pre>
+
+<div class="callout good">
+  <div class="callout-title">设计洞察 — 向上导航</div>
+  <code>OwnerAbility</code> 通过 <code>GetParent&lt;Ability&gt;()</code> 获得（层级关系）<br>
+  <code>OwnerEntity</code> 通过 <code>OwnerAbility.OwnerEntity</code> 再向上跳一层<br><br>
+  这意味着从任何一个 AbilityEffect 实例，你可以沿着父子链向上找到持有它的 Ability 和 CombatEntity。无需额外存储引用。<br><br>
+  <strong>TriggerContext</strong> 是一个值类型 struct，用于在触发时传递上下文信息——谁触发的、对谁生效、通过什么载体（子弹/范围）。
+</div>
+
+<!-- ===== 3. Create ===== -->
+<h2 id="create"><span class="num">5.3</span> AbilityEffectSystem.Create — 工厂方法</h2>
+
+<p>Create 是 AbilityEffect 的工厂方法。它根据配置类型动态挂载对应的 Component，实现了<strong>配置驱动的组件组合</strong>。</p>
+
+<pre class="code"><span class="file-tag">AbilityEffectSystem.cs — Create 工厂</span>
+<span class="kw">public static</span> <span class="tp">AbilityEffect</span> <span class="fn">Create</span>(<span class="tp">Ability</span> ability, <span class="tp">Effect</span> effectConfig)
+{
+    <span class="kw">var</span> abilityEffect = ability.<span class="fn">AddChild</span>&lt;<span class="tp">AbilityEffect</span>&gt;();
+    abilityEffect.EffectConfig = effectConfig;
+    abilityEffect.Name = effectConfig.GetType().Name;
+
+    <span class="cm">/// 行动控制</span>
+    <span class="kw">if</span> (effectConfig <span class="kw">is</span> <span class="tp">ActionControlEffect</span>)
+        abilityEffect.<span class="fn">AddComponent</span>&lt;<span class="tp">EffectActionControlComponent</span>&gt;();
+
+    <span class="cm">/// 属性修改</span>
+    <span class="kw">if</span> (effectConfig <span class="kw">is</span> <span class="tp">AttributeModifyEffect</span>)
+        abilityEffect.<span class="fn">AddComponent</span>&lt;<span class="tp">EffectAttributeModifyComponent</span>&gt;();
+
+    <span class="cm">/// 伤害效果</span>
+    <span class="kw">if</span> (effectConfig <span class="kw">is</span> <span class="tp">DamageEffect</span>)
+        abilityEffect.<span class="fn">AddComponent</span>&lt;<span class="tp">EffectDamageComponent</span>&gt;();
+
+    <span class="cm">/// 治疗效果</span>
+    <span class="kw">if</span> (effectConfig <span class="kw">is</span> <span class="tp">CureEffect</span>)
+        abilityEffect.<span class="fn">AddComponent</span>&lt;<span class="tp">EffectCureComponent</span>&gt;();
+
+    <span class="cm">/// 护盾防御效果</span>
+    <span class="kw">if</span> (effectConfig <span class="kw">is</span> <span class="tp">ShieldDefenseEffect</span>)
+        abilityEffect.<span class="fn">AddComponent</span>&lt;<span class="tp">EffectShieldDefenseComponent</span>&gt;();
+
+    <span class="cm">/// 施加状态效果</span>
+    <span class="kw">if</span> (effectConfig <span class="kw">is</span> <span class="tp">AddStatusEffect</span>)
+        abilityEffect.<span class="fn">AddComponent</span>&lt;<span class="tp">EffectAddBuffComponent</span>&gt;();
+
+    <span class="cm">/// 效果装饰器</span>
+    <span class="kw">var</span> decorators = abilityEffect.EffectConfig.Decorators;
+    <span class="kw">if</span> (decorators != <span class="kw">null</span> && decorators.Count > <span class="nm">0</span>)
+        abilityEffect.<span class="fn">AddComponent</span>&lt;<span class="tp">EffectDecoratorComponent</span>&gt;();
+
+    <span class="kw">return</span> abilityEffect;
+}
+</pre>
+
+<div class="callout">
+  <div class="callout-title">类型判断用 is 而非字符串</div>
+  注意这里用的是 C# 的 <code>is</code> 类型检测（<code>effectConfig is DamageEffect</code>），而不是字符串比较。<br>
+  配置类型是继承自 <code>Effect</code> 基类的具体子类，编译期类型安全。<br><br>
+  这与 AbilitySystem 中用字符串 <code>"Buff"/"Skill"</code> 判断不同 — 因为 Effect 类型是由程序员定义的代码类型，而 Skill/Buff 的分类是策划配表决定的。
+</div>
+
+<div class="callout warn">
+  <div class="callout-title">用 if 不用 switch/else if 的原因</div>
+  注意这里不是 <code>else if</code> 而是独立的 <code>if</code>。这意味着<strong>一个 Effect 理论上可以同时挂多个 Component</strong>（如果配置类型有多重继承关系）。虽然当前配置类型不会同时满足多个条件，但这种写法保留了扩展性。
+</div>
+
+<!-- ===== 4. TriggerApply ===== -->
+<h2 id="trigger-apply"><span class="num">5.4</span> TriggerApply — 效果分发</h2>
+
+<p>当 Trigger 触发时，调用 <code>AbilityEffectSystem.TriggerApply</code>。它遍历 AbilityEffect 的所有 Component，找到对应的 System 调用其 TriggerApply。</p>
+
+<pre class="code"><span class="file-tag">AbilityEffectSystem.cs — TriggerApply 分发</span>
+<span class="kw">public static void</span> <span class="fn">TriggerApply</span>(<span class="tp">EffectAssignAction</span> effectAssign)
+{
+    <span class="kw">var</span> abilityEffect = effectAssign.AbilityEffect;
+
+    <span class="cm">// 遍历 AbilityEffect 身上的所有组件</span>
+    <span class="kw">foreach</span> (<span class="kw">var</span> item <span class="kw">in</span> effectAssign.AbilityEffect.Components.Values)
+    {
+        <span class="kw">if</span> (item <span class="kw">is</span> <span class="tp">EffectActionControlComponent</span>)
+            EffectActionControlSystem.<span class="fn">TriggerApply</span>(abilityEffect, effectAssign);
+
+        <span class="kw">if</span> (item <span class="kw">is</span> <span class="tp">EffectAddBuffComponent</span>)
+            EffectAddBuffSystem.<span class="fn">TriggerApply</span>(abilityEffect, effectAssign);
+
+        <span class="kw">if</span> (item <span class="kw">is</span> <span class="tp">EffectAttributeModifyComponent</span>)
+            EffectAttributeSystem.<span class="fn">TriggerApply</span>(abilityEffect, effectAssign);
+
+        <span class="kw">if</span> (item <span class="kw">is</span> <span class="tp">EffectCureComponent</span>)
+            EffectCureSystem.<span class="fn">TriggerApply</span>(abilityEffect, effectAssign);
+
+        <span class="kw">if</span> (item <span class="kw">is</span> <span class="tp">EffectDamageComponent</span>)
+            EffectDamageSystem.<span class="fn">TriggerApply</span>(abilityEffect, effectAssign);
+
+        <span class="kw">if</span> (item <span class="kw">is</span> <span class="tp">EffectShieldDefenseComponent</span>)
+            EffectShieldSystem.<span class="fn">TriggerApply</span>(abilityEffect, effectAssign);
+    }
+}
+</pre>
+
+<div class="callout">
+  <div class="callout-title">EffectAssignAction 是什么</div>
+  <code>EffectAssignAction</code> 是一个 Action 实体（Ch08 详述），携带了触发上下文：<br>
+  • <code>.AbilityEffect</code> — 哪个 Effect 被触发<br>
+  • <code>.Target</code> — 效果作用目标<br>
+  • <code>.SourceAbility</code> — 来源 Ability<br><br>
+  它是 Effect（配置声明）和 Action（实际执行）之间的桥梁。
+</div>
+
+<!-- ===== 5. Damage ===== -->
+<h2 id="damage"><span class="num">5.5</span> EffectDamageSystem — 伤害效果</h2>
+
+<p>伤害是最常用的效果类型。它解析公式计算伤害值，然后通过 DamageAbility 创建 DamageAction 执行实际伤害。</p>
+
+<pre class="code"><span class="file-tag">EffectDamageSystem.cs — 完整源码</span>
+<span class="kw">public class</span> <span class="tp">EffectDamageSystem</span> : <span class="tp">AComponentSystem</span>&lt;<span class="tp">AbilityEffect</span>, <span class="tp">EffectDamageComponent</span>&gt;,
+    <span class="tp">IAwake</span>&lt;<span class="tp">AbilityEffect</span>, <span class="tp">EffectDamageComponent</span>&gt;
+{
+    <span class="kw">public void</span> <span class="fn">Awake</span>(<span class="tp">AbilityEffect</span> entity, <span class="tp">EffectDamageComponent</span> component)
+    {
+        component.DamageEffect = entity.EffectConfig <span class="kw">as</span> <span class="tp">DamageEffect</span>;
+        component.DamageValueFormula = component.DamageEffect.DamageValueFormula;
+    }
+
+    <span class="kw">public static int</span> <span class="fn">GetDamageValue</span>(<span class="tp">AbilityEffect</span> entity)
+    {
+        <span class="kw">return</span> <span class="fn">ParseDamage</span>(entity);
+    }
+
+    <span class="kw">private static int</span> <span class="fn">ParseDamage</span>(<span class="tp">AbilityEffect</span> entity)
+    {
+        <span class="kw">var</span> component = entity.GetComponent&lt;<span class="tp">EffectDamageComponent</span>&gt;();
+        <span class="kw">var</span> expression = ExpressionHelper.ExpressionParser
+            .<span class="fn">EvaluateExpression</span>(component.DamageValueFormula);
+
+        <span class="cm">// 注入运行时属性值到表达式参数</span>
+        <span class="kw">if</span> (expression.Parameters.ContainsKey(<span class="st">"攻击力数值"</span>))
+        {
+            expression.Parameters[<span class="st">"攻击力数值"</span>].Value =
+                entity.OwnerEntity.GetComponent&lt;<span class="tp">AttributeComponent</span>&gt;().Attack.Value;
+        }
+
+        <span class="kw">return</span> (<span class="kw">int</span>)System.Math.<span class="fn">Ceiling</span>((<span class="kw">float</span>)expression.Value);
+    }
+
+    <span class="kw">public static void</span> <span class="fn">TriggerApply</span>(<span class="tp">AbilityEffect</span> entity, <span class="tp">EffectAssignAction</span> effectAssign)
+    {
+        <span class="kw">var</span> component = entity.GetComponent&lt;<span class="tp">EffectDamageComponent</span>&gt;();
+        <span class="kw">if</span> (entity.OwnerEntity.DamageAbility.<span class="fn">TryMakeAction</span>(<span class="kw">out var</span> damageAction))
+        {
+            damageAction.SourceAssignAction = effectAssign;
+            damageAction.Target = effectAssign.Target;
+            damageAction.DamageSource = DamageSource.Skill;
+            DamageActionSystem.<span class="fn">Execute</span>(damageAction);
+        }
+    }
+}
+</pre>
+
+<div class="callout good">
+  <div class="callout-title">公式驱动的伤害计算</div>
+  <code>DamageValueFormula</code> 是配置中的字符串表达式（如 <code>"攻击力数值 * 2.5 + 100"</code>）。<br>
+  <code>ParseDamage</code> 在运行时解析表达式、注入当前属性值、计算结果。<br><br>
+  这意味着策划可以在 Excel 中写任意伤害公式，无需程序修改代码。<br>
+  属性值来自 <code>FloatNumeric.Value</code>（Ch02），已经包含所有 Buff 加成。
+</div>
+
+<!-- ===== 6. Cure ===== -->
+<h2 id="cure"><span class="num">5.6</span> EffectCureSystem — 治疗效果</h2>
+
+<pre class="code"><span class="file-tag">EffectCureSystem.cs — 完整源码</span>
+<span class="kw">public class</span> <span class="tp">EffectCureSystem</span> : <span class="tp">AComponentSystem</span>&lt;<span class="tp">AbilityEffect</span>, <span class="tp">EffectCureComponent</span>&gt;,
+    <span class="tp">IAwake</span>&lt;<span class="tp">AbilityEffect</span>, <span class="tp">EffectCureComponent</span>&gt;
+{
+    <span class="kw">public void</span> <span class="fn">Awake</span>(<span class="tp">AbilityEffect</span> entity, <span class="tp">EffectCureComponent</span> component)
+    {
+        component.CureEffect = entity.EffectConfig <span class="kw">as</span> <span class="tp">CureEffect</span>;
+        component.CureValueProperty = component.CureEffect.CureValueFormula;
+    }
+
+    <span class="kw">public static int</span> <span class="fn">GetCureValue</span>(<span class="tp">AbilityEffect</span> entity)
+    {
+        <span class="kw">return</span> <span class="fn">ParseValue</span>(entity);
+    }
+
+    <span class="kw">private static int</span> <span class="fn">ParseValue</span>(<span class="tp">AbilityEffect</span> entity)
+    {
+        <span class="kw">var</span> expression = ExpressionHelper.ExpressionParser
+            .<span class="fn">EvaluateExpression</span>(entity.GetComponent&lt;<span class="tp">EffectCureComponent</span>&gt;().CureValueProperty);
+
+        <span class="kw">if</span> (expression.Parameters.ContainsKey(<span class="st">"生命值数值"</span>))
+        {
+            expression.Parameters[<span class="st">"生命值数值"</span>].Value =
+                entity.OwnerEntity.GetComponent&lt;<span class="tp">AttributeComponent</span>&gt;().HealthPoint.Value;
+        }
+
+        <span class="kw">return</span> (<span class="kw">int</span>)System.Math.<span class="fn">Ceiling</span>((<span class="kw">float</span>)expression.Value);
+    }
+
+    <span class="kw">public static void</span> <span class="fn">TriggerApply</span>(<span class="tp">AbilityEffect</span> entity, <span class="tp">EffectAssignAction</span> effectAssign)
+    {
+        <span class="kw">if</span> (entity.OwnerEntity.CureAbility.<span class="fn">TryMakeAction</span>(<span class="kw">out var</span> action))
+        {
+            action.SourceAssignAction = effectAssign;
+            action.Target = effectAssign.Target;
+            CureActionSystem.<span class="fn">Execute</span>(action);
+        }
+    }
+}
+</pre>
+
+<div class="callout">
+  <div class="callout-title">治疗与伤害的对称结构</div>
+  EffectCureSystem 和 EffectDamageSystem 结构完全对称：<br>
+  • Awake：缓存配置引用 + 公式字符串<br>
+  • ParseValue：解析表达式 + 注入属性值<br>
+  • TriggerApply：创建 Action + Execute<br><br>
+  区别仅在于使用的 Ability（<code>CureAbility</code> vs <code>DamageAbility</code>）和 ActionSystem（<code>CureActionSystem</code> vs <code>DamageActionSystem</code>）。
+</div>
+
+<!-- ===== 7. AddBuff ===== -->
+<h2 id="addbuff"><span class="num">5.7</span> EffectAddBuffSystem — 施加状态</h2>
+
+<pre class="code"><span class="file-tag">EffectAddBuffSystem.cs — 完整源码</span>
+<span class="kw">public class</span> <span class="tp">EffectAddBuffSystem</span> : <span class="tp">AComponentSystem</span>&lt;<span class="tp">AbilityEffect</span>, <span class="tp">EffectAddBuffComponent</span>&gt;,
+    <span class="tp">IAwake</span>&lt;<span class="tp">AbilityEffect</span>, <span class="tp">EffectAddBuffComponent</span>&gt;
+{
+    <span class="kw">public void</span> <span class="fn">Awake</span>(<span class="tp">AbilityEffect</span> entity, <span class="tp">EffectAddBuffComponent</span> component)
+    {
+        component.AddStatusEffect = entity.EffectConfig <span class="kw">as</span> <span class="tp">AddStatusEffect</span>;
+        component.Duration = component.AddStatusEffect.Duration;
+    }
+
+    <span class="kw">public static int</span> <span class="fn">GetNumericValue</span>(<span class="tp">AbilityEffect</span> entity)
+    {
+        <span class="kw">return</span> <span class="nm">1</span>;
+    }
+
+    <span class="kw">public static void</span> <span class="fn">TriggerApply</span>(<span class="tp">AbilityEffect</span> entity, <span class="tp">EffectAssignAction</span> effectAssign)
+    {
+        <span class="kw">if</span> (entity.OwnerEntity.AddStatusAbility.<span class="fn">TryMakeAction</span>(<span class="kw">out var</span> action))
+        {
+            action.SourceAssignAction = effectAssign;
+            action.Target = effectAssign.Target;
+            action.SourceAbility = effectAssign.SourceAbility;
+            AddBuffActionSystem.<span class="fn">Execute</span>(action);
+        }
+    }
+
+    <span class="kw">public static</span> <span class="tp">IActionExecute</span> <span class="fn">GetActionExecution</span>(<span class="tp">AbilityEffect</span> entity)
+    {
+        <span class="kw">if</span> (entity.OwnerEntity.AddStatusAbility.<span class="fn">TryMakeAction</span>(<span class="kw">out var</span> action))
+        {
+            <span class="kw">return</span> action;
+        }
+        <span class="kw">return null</span>;
+    }
+}
+</pre>
+
+<div class="callout good">
+  <div class="callout-title">Buff 施加的递归性</div>
+  EffectAddBuff 是「能力施加能力」的实现。一个技能（Ability）的 Effect 可以给目标添加一个 Buff（另一个 Ability）。<br>
+  这里的 <code>AddStatusAbility</code> 是 CombatEntity 上的工厂 Ability，专门负责创建「施加 Buff」的 Action。<br><br>
+  <strong>整条链路：</strong> 技能 Ability → Effect → AddBuffAction → 目标身上 AbilitySystem.Attach() → 新 Buff Ability
+</div>
+
+<!-- ===== 8. Attribute ===== -->
+<h2 id="attribute"><span class="num">5.8</span> EffectAttributeSystem — 属性修改</h2>
+
+<p>属性修改是 Buff 最常见的效果。它在 Enable 时添加 Modifier，Disable 时移除 Modifier，利用 FloatNumeric 的可逆性实现精确回退。</p>
+
+<pre class="code"><span class="file-tag">EffectAttributeSystem.cs — 完整源码</span>
+<span class="kw">public class</span> <span class="tp">EffectAttributeSystem</span> : <span class="tp">AComponentSystem</span>&lt;<span class="tp">AbilityEffect</span>, <span class="tp">EffectAttributeModifyComponent</span>&gt;,
+    <span class="tp">IAwake</span>&lt;<span class="tp">AbilityEffect</span>, <span class="tp">EffectAttributeModifyComponent</span>&gt;,
+    <span class="tp">IEnable</span>&lt;<span class="tp">AbilityEffect</span>, <span class="tp">EffectAttributeModifyComponent</span>&gt;,
+    <span class="tp">IDisable</span>&lt;<span class="tp">AbilityEffect</span>, <span class="tp">EffectAttributeModifyComponent</span>&gt;
+{
+    <span class="kw">public void</span> <span class="fn">Awake</span>(<span class="tp">AbilityEffect</span> entity, <span class="tp">EffectAttributeModifyComponent</span> component)
+    {
+        component.AttributeModifyEffect = entity.EffectConfig <span class="kw">as</span> <span class="tp">AttributeModifyEffect</span>;
+        component.ModifyValueFormula = component.AttributeModifyEffect.NumericValue;
+    }
+
+    <span class="kw">public void</span> <span class="fn">Enable</span>(<span class="tp">AbilityEffect</span> entity, <span class="tp">EffectAttributeModifyComponent</span> component)
+    {
+        <span class="kw">var</span> parentEntity = entity.OwnerAbility.Parent;
+        <span class="kw">var</span> attributeModifyEffect = component.AttributeModifyEffect;
+        <span class="kw">var</span> numericValue = component.ModifyValueFormula;
+        numericValue = numericValue.Replace(<span class="st">"%"</span>, <span class="st">""</span>);
+
+        <span class="kw">var</span> expression = ExpressionHelper.ExpressionParser.<span class="fn">EvaluateExpression</span>(numericValue);
+        <span class="kw">var</span> value = (<span class="kw">float</span>)expression.Value;
+        <span class="kw">var</span> numericModifier = <span class="kw">new</span> <span class="tp">FloatModifier</span>() { Value = value };
+
+        <span class="kw">var</span> attributeType = attributeModifyEffect.AttributeType;
+        <span class="kw">var</span> numeric = AttributeSystem.<span class="fn">GetNumeric</span>(parentEntity <span class="kw">as</span> <span class="tp">CombatEntity</span>, attributeType);
+
+        <span class="kw">if</span> (attributeModifyEffect.ModifyType == ModifyType.BaseValue)
+        {
+            NumericSystem.<span class="fn">SetBase</span>(numeric, value);
+        }
+        <span class="kw">if</span> (attributeModifyEffect.ModifyType == ModifyType.Add)
+        {
+            NumericSystem.<span class="fn">AddModifier</span>(numeric, ModifierType.FinalAdd, numericModifier);
+        }
+        <span class="kw">if</span> (attributeModifyEffect.ModifyType == ModifyType.PercentAdd)
+        {
+            NumericSystem.<span class="fn">AddModifier</span>(numeric, ModifierType.FinalPctAdd, numericModifier);
+        }
+
+        <span class="hl">component.AttributeModifier = numericModifier;</span>  <span class="cm">// ★ 保存引用用于 Disable 时移除</span>
+    }
+
+    <span class="kw">public void</span> <span class="fn">Disable</span>(<span class="tp">AbilityEffect</span> entity, <span class="tp">EffectAttributeModifyComponent</span> component)
+    {
+        <span class="kw">var</span> parentEntity = entity.OwnerAbility.Parent;
+        <span class="kw">var</span> attributeType = component.AttributeModifyEffect.AttributeType;
+        <span class="kw">var</span> numeric = AttributeSystem.<span class="fn">GetNumeric</span>(parentEntity <span class="kw">as</span> <span class="tp">CombatEntity</span>, attributeType);
+
+        <span class="kw">if</span> (component.AttributeModifyEffect.ModifyType == ModifyType.Add)
+        {
+            NumericSystem.<span class="fn">RemoveModifier</span>(numeric, ModifierType.FinalAdd,
+                <span class="hl">component.AttributeModifier</span>);
+        }
+        <span class="kw">if</span> (component.AttributeModifyEffect.ModifyType == ModifyType.PercentAdd)
+        {
+            NumericSystem.<span class="fn">RemoveModifier</span>(numeric, ModifierType.FinalPctAdd,
+                <span class="hl">component.AttributeModifier</span>);
+        }
+    }
+
+    <span class="kw">public static void</span> <span class="fn">TriggerApply</span>(<span class="tp">AbilityEffect</span> entity, <span class="tp">EffectAssignAction</span> effectAssign)
+    {
+        entity.GetComponent&lt;<span class="tp">EffectAttributeModifyComponent</span>&gt;().Enable = <span class="kw">true</span>;
+    }
+}
+</pre>
+
+<div class="callout good">
+  <div class="callout-title">完美闭环 — Enable/Disable 对称性</div>
+  这是整套 ECS 架构的精髓展示：<br><br>
+  <strong>Enable 时：</strong> 解析配置 → 创建 FloatModifier → AddModifier → 数值生效 → 保存 Modifier 引用<br>
+  <strong>Disable 时：</strong> 取出保存的 Modifier 引用 → RemoveModifier → 数值精确恢复<br><br>
+  Buff 结束 → <code>Ability.Enable = false</code> → 级联 → <code>AbilityEffect.Enable = false</code> → 级联 → <code>Component.Enable = false</code> → 触发 <code>EffectAttributeSystem.Disable</code> → 移除 Modifier。<br><br>
+  <strong>整条链自动驱动，零手动管理。</strong>
+</div>
+
+<!-- ===== 9. ActionControl ===== -->
+<h2 id="actioncontrol"><span class="num">5.9</span> EffectActionControlSystem — 行为控制</h2>
+
+<p>行为控制效果（眩晕、沉默、击飞等）在 Enable/Disable 时通知 BuffSystem 重新计算角色的控制状态。</p>
+
+<pre class="code"><span class="file-tag">EffectActionControlSystem.cs — 完整源码</span>
+<span class="kw">public class</span> <span class="tp">EffectActionControlSystem</span> : <span class="tp">AComponentSystem</span>&lt;<span class="tp">AbilityEffect</span>, <span class="tp">EffectActionControlComponent</span>&gt;,
+    <span class="tp">IAwake</span>&lt;<span class="tp">AbilityEffect</span>, <span class="tp">EffectActionControlComponent</span>&gt;,
+    <span class="tp">IEnable</span>&lt;<span class="tp">AbilityEffect</span>, <span class="tp">EffectActionControlComponent</span>&gt;,
+    <span class="tp">IDisable</span>&lt;<span class="tp">AbilityEffect</span>, <span class="tp">EffectActionControlComponent</span>&gt;
+{
+    <span class="kw">public void</span> <span class="fn">Awake</span>(<span class="tp">AbilityEffect</span> entity, <span class="tp">EffectActionControlComponent</span> component)
+    {
+        component.ActionControlEffect = entity.EffectConfig <span class="kw">as</span> <span class="tp">ActionControlEffect</span>;
+    }
+
+    <span class="kw">public void</span> <span class="fn">Enable</span>(<span class="tp">AbilityEffect</span> entity, <span class="tp">EffectActionControlComponent</span> component)
+    {
+        BuffSystem.<span class="fn">OnBuffChanged</span>(entity.Parent.Parent <span class="kw">as</span> <span class="tp">CombatEntity</span>,
+            entity.GetParent&lt;<span class="tp">Ability</span>&gt;());
+    }
+
+    <span class="kw">public void</span> <span class="fn">Disable</span>(<span class="tp">AbilityEffect</span> entity, <span class="tp">EffectActionControlComponent</span> component)
+    {
+        BuffSystem.<span class="fn">OnBuffChanged</span>(entity.Parent.Parent <span class="kw">as</span> <span class="tp">CombatEntity</span>,
+            entity.GetParent&lt;<span class="tp">Ability</span>&gt;());
+    }
+
+    <span class="kw">public static void</span> <span class="fn">TriggerApply</span>(<span class="tp">AbilityEffect</span> entity, <span class="tp">EffectAssignAction</span> effectAssign)
+    {
+        entity.GetComponent&lt;<span class="tp">EffectActionControlComponent</span>&gt;().Enable = <span class="kw">true</span>;
+    }
+}
+</pre>
+
+<div class="callout">
+  <div class="callout-title">BuffSystem.OnBuffChanged 的作用</div>
+  Enable 和 Disable 都调用同一个方法 <code>BuffSystem.OnBuffChanged</code>。这个方法会重新遍历角色身上所有 Buff 的 ActionControlEffect，计算当前的控制状态（是否被眩晕/沉默/禁锢等）。<br><br>
+  这是一种<strong>声明式</strong>的状态管理 — 不关心「加了什么减了什么」，每次变更都从头算一遍「当前总共有什么控制」。简单粗暴但绝对正确。
+</div>
+
+<!-- ===== 10. Shield ===== -->
+<h2 id="shield"><span class="num">5.10</span> EffectShieldSystem — 护盾效果</h2>
+
+<pre class="code"><span class="file-tag">EffectShieldSystem.cs — 完整源码</span>
+<span class="kw">public class</span> <span class="tp">EffectShieldSystem</span> : <span class="tp">AComponentSystem</span>&lt;<span class="tp">AbilityEffect</span>, <span class="tp">EffectShieldDefenseComponent</span>&gt;,
+    <span class="tp">IAwake</span>&lt;<span class="tp">AbilityEffect</span>, <span class="tp">EffectShieldDefenseComponent</span>&gt;
+{
+    <span class="kw">public void</span> <span class="fn">Awake</span>(<span class="tp">AbilityEffect</span> entity, <span class="tp">EffectShieldDefenseComponent</span> component)
+    {
+        component.ShieldDefenseEffect = entity.EffectConfig <span class="kw">as</span> <span class="tp">ShieldDefenseEffect</span>;
+    }
+
+    <span class="kw">public static void</span> <span class="fn">TriggerApply</span>(<span class="tp">AbilityEffect</span> entity, <span class="tp">EffectAssignAction</span> effectAssign)
+    {
+        effectAssign.Target.<span class="fn">AddComponent</span>&lt;<span class="tp">AbilityItemShieldComponent</span>&gt;();
+    }
+}
+</pre>
+
+<div class="callout">
+  <div class="callout-title">护盾的组件式实现</div>
+  护盾效果最简单 — TriggerApply 时直接给目标 Entity 添加一个 <code>AbilityItemShieldComponent</code>。<br>
+  DamageActionSystem 在执行伤害时会检查目标是否有这个组件，如果有则先扣护盾值。<br><br>
+  这是 ECS 思想的典型应用：通过「有没有某个组件」来判断状态，而不是维护一个 bool 字段。
+</div>
+
+<!-- ===== 11. Decorator ===== -->
+<h2 id="decorator"><span class="num">5.11</span> EffectDecoratorSystem — 效果装饰器</h2>
+
+<p>装饰器是对已有效果的增强/修改。例如「伤害随命中目标数量递减」。</p>
+
+<pre class="code"><span class="file-tag">EffectDecoratorSystem.cs — 完整源码</span>
+<span class="kw">public class</span> <span class="tp">EffectDecoratorSystem</span> : <span class="tp">AComponentSystem</span>&lt;<span class="tp">AbilityEffect</span>, <span class="tp">EffectDecoratorComponent</span>&gt;,
+    <span class="tp">IAwake</span>&lt;<span class="tp">AbilityEffect</span>, <span class="tp">EffectDecoratorComponent</span>&gt;
+{
+    <span class="kw">public void</span> <span class="fn">Awake</span>(<span class="tp">AbilityEffect</span> entity, <span class="tp">EffectDecoratorComponent</span> component)
+    {
+        <span class="kw">if</span> (entity.EffectConfig.Decorators != <span class="kw">null</span>)
+        {
+            <span class="kw">foreach</span> (<span class="kw">var</span> effectDecorator <span class="kw">in</span> entity.EffectConfig.Decorators)
+            {
+                <span class="kw">if</span> (effectDecorator <span class="kw">is</span> <span class="tp">DamageReduceWithTargetCountDecorator</span> reduceWithTargetCountDecorator)
+                {
+                    entity.<span class="fn">AddComponent</span>&lt;<span class="tp">EffectDamageReduceWithTargetCountComponent</span>&gt;();
+                }
+            }
+        }
+    }
+}
+</pre>
+
+<h3>EffectDamageReduceWithTargetCountComponent</h3>
+<pre class="code"><span class="file-tag">装饰器组件 — 多目标伤害递减</span>
+<span class="kw">public class</span> <span class="tp">EffectDamageReduceWithTargetCountComponent</span> : <span class="tp">EcsComponent</span>
+{
+    <span class="kw">public float</span> <span class="fn">ReducePercent</span> { <span class="kw">get</span>; <span class="kw">set</span>; }  <span class="cm">// 每多一个目标减少的百分比</span>
+    <span class="kw">public float</span> <span class="fn">MinPercent</span> { <span class="kw">get</span>; <span class="kw">set</span>; }     <span class="cm">// 最低伤害百分比下限</span>
+}
+</pre>
+
+<div class="callout warn">
+  <div class="callout-title">装饰器模式的实际用途</div>
+  MOBA 中常见场景：AOE 技能对第一个目标 100% 伤害，每多一个目标减 15%，最低 40%。<br><br>
+  <code>ReducePercent = 15</code>，<code>MinPercent = 40</code><br>
+  • 1 目标：100% 伤害<br>
+  • 2 目标：85% 伤害<br>
+  • 3 目标：70% 伤害<br>
+  • 5+ 目标：40% 伤害（触底）<br><br>
+  装饰器不改变 Effect 本身的逻辑，而是在 DamageActionSystem 执行时检查是否存在装饰器组件，如果存在则修改最终伤害值。
+</div>
+
+<!-- ===== 12. Conversion ===== -->
+<h2 id="conversion"><span class="num">5.12</span> Effect → Action 转换模式</h2>
+
+<p>Effect 系统中最重要的设计模式是 <strong>Effect → Action</strong> 的转换。Effect 是「能力声明」（静态配置），Action 是「行为执行」（运行时实例）。</p>
+
+<div class="flow flow-v">
+  <div class="flow-row">
+    <div class="flow-node blue">Trigger 触发条件满足</div>
+    <span class="flow-label">如：技能命中目标、计时器到期</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node purple">创建 EffectAssignAction</div>
+    <span class="flow-label">携带 Target + AbilityEffect 引用</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node cyan">AbilityEffectSystem.TriggerApply(effectAssign)</div>
+    <span class="flow-label">分发到对应的 EffectXxxSystem.TriggerApply</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node green">OwnerEntity.XxxAbility.TryMakeAction()</div>
+    <span class="flow-label">通过工厂 Ability 创建具体 Action 实例</span>
+  </div>
+  <div class="flow-arrow-d">↓</div>
+  <div class="flow-row">
+    <div class="flow-node warn">XxxActionSystem.Execute(action)</div>
+    <span class="flow-label">执行实际效果（扣血/加血/加 Buff/...）</span>
+  </div>
+</div>
+
+<h3>Effect → Action 映射表</h3>
+<table class="data">
+  <thead><tr><th>Effect 类型</th><th>组件</th><th>工厂 Ability</th><th>Action 类型</th><th>ActionSystem</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>DamageEffect</td>
+      <td><code>EffectDamageComponent</code></td>
+      <td><code>DamageAbility</code></td>
+      <td>DamageAction</td>
+      <td><code>DamageActionSystem</code></td>
+    </tr>
+    <tr>
+      <td>CureEffect</td>
+      <td><code>EffectCureComponent</code></td>
+      <td><code>CureAbility</code></td>
+      <td>CureAction</td>
+      <td><code>CureActionSystem</code></td>
+    </tr>
+    <tr>
+      <td>AddStatusEffect</td>
+      <td><code>EffectAddBuffComponent</code></td>
+      <td><code>AddStatusAbility</code></td>
+      <td>AddBuffAction</td>
+      <td><code>AddBuffActionSystem</code></td>
+    </tr>
+    <tr>
+      <td>AttributeModifyEffect</td>
+      <td><code>EffectAttributeModifyComponent</code></td>
+      <td>—（直接操作 Numeric）</td>
+      <td>—</td>
+      <td>—</td>
+    </tr>
+    <tr>
+      <td>ActionControlEffect</td>
+      <td><code>EffectActionControlComponent</code></td>
+      <td>—（直接通知 BuffSystem）</td>
+      <td>—</td>
+      <td>—</td>
+    </tr>
+    <tr>
+      <td>ShieldDefenseEffect</td>
+      <td><code>EffectShieldDefenseComponent</code></td>
+      <td>—（直接添加组件）</td>
+      <td>—</td>
+      <td>—</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout good">
+  <div class="callout-title">两种触发模式</div>
+  上表揭示了两种不同的触发模式：<br><br>
+  <strong>模式 A：通过 Action 执行</strong>（Damage/Cure/AddBuff）<br>
+  Effect → TryMakeAction → Action → ActionSystem.Execute<br>
+  适用于：一次性执行的行为，需要目标，需要记录战斗日志<br><br>
+  <strong>模式 B：直接生效</strong>（Attribute/ActionControl/Shield）<br>
+  TriggerApply 时直接操作组件或通知系统<br>
+  适用于：持续性效果，通过 Enable/Disable 控制生命周期<br><br>
+  Attribute 和 ActionControl 使用 Enable/Disable 机制（Buff 激活时生效，结束时回退）。它们不需要 Action 是因为效果是<strong>可逆的</strong>。
+</div>
+
+<!-- ===== 13. Summary ===== -->
+<h2 id="summary"><span class="num">5.13</span> 设计总结</h2>
+
+<div class="card-grid">
+  <div class="card">
+    <div class="card-title">组件即声明</div>
+    <div class="card-body">AbilityEffect 挂什么组件就是什么效果。工厂方法 Create 根据配置类型自动挂载。<strong>配置驱动 + 组件组合 = 无限可扩展性。</strong>添加新效果类型只需：新配置类 + 新 Component + 新 System。</div>
+  </div>
+  <div class="card green">
+    <div class="card-title">所有 System 结构统一</div>
+    <div class="card-body">每个 EffectXxxSystem 都遵循相同模式：<br>• Awake：缓存配置引用<br>• Enable/Disable（可选）：持续效果<br>• TriggerApply（静态）：一次性效果<br>阅读任何一个就能理解全部。</div>
+  </div>
+  <div class="card warn">
+    <div class="card-title">TriggerApply 的手动分发</div>
+    <div class="card-body">AbilityEffectSystem.TriggerApply 用 <code>if (item is XxxComponent)</code> 手动分发到各 System。这不是 EcsNode 的自动驱动，而是手动调度。好处是执行顺序可控；坏处是每加一种新 Effect 就得在这里多加一个 if。</div>
+  </div>
+  <div class="card bad">
+    <div class="card-title">已知局限</div>
+    <div class="card-body">• TriggerApply 的 if 链不是开闭原则友好的<br>• 属性修改的 BaseValue 模式在 Disable 时没有回退逻辑（SetBase 是覆盖操作）<br>• 装饰器目前只实现了 DamageReduceWithTargetCount 一种，扩展点存在但不完善</div>
+  </div>
+</div>
+
+<div class="callout good">
+  <div class="callout-title">验收标准 — 读完本章后你应该能回答</div>
+  1. AbilityEffectSystem.Create 如何根据配置类型决定挂什么组件？为什么用 <code>if</code> 不用 <code>else if</code>？<br>
+  2. EffectAttributeSystem 如何实现 Buff 结束时精确回退属性修改？从 Ability.Enable=false 到 Modifier 被移除经过了几步？<br>
+  3. EffectDamageSystem.TriggerApply 和 EffectAttributeSystem.TriggerApply 的实现有什么本质区别？为什么一个创建 Action，另一个直接启用组件？<br>
+  4. 如果要新增一种效果类型（如「移速减缓」），需要创建哪些文件、修改哪些地方？<br>
+  5. 装饰器模式在这个架构中是如何工作的？它修改了 Effect 还是 Action？
+</div>
+
+<!-- Chapter Navigation -->
+<div class="ch-nav">
+  <a href="ch04-ability.html">
+    <span class="dir">← 上一章</span>
+    Ch04 技能/Buff 核心
+  </a>
+  <a href="ch06-trigger.html">
+    <span class="dir">下一章 →</span>
+    Ch06 触发系统
+  </a>
+</div>
+
+</main>
+</div>
+</body>
+</html>

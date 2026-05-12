@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EGamePlay 技能框架 — 学习文档</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&family=Noto+Sans+SC:wght@400;600;700;900&family=JetBrains+Mono:wght@400;600&family=Playfair+Display:wght@900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+.index-hero { text-align: center; padding: 80px 0 60px; }
+.index-hero h1 { font-size: 56px; margin-bottom: 20px; }
+.index-hero .subtitle { font-size: 18px; color: var(--text-2); max-width: 600px; margin: 0 auto 40px; }
+.chapter-list { max-width: 800px; margin: 0 auto; }
+.ch-item {
+  display: flex; align-items: flex-start; gap: 20px; padding: 24px 28px;
+  background: var(--bg-soft); border: 1px solid var(--border); border-radius: 14px;
+  margin: 12px 0; text-decoration: none; color: var(--text-1); transition: all .2s;
+  position: relative; overflow: hidden;
+}
+.ch-item:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,.3); }
+.ch-item::before { content:''; position:absolute; top:0; left:0; bottom:0; width:4px; background:var(--accent); opacity:0; transition:opacity .2s; }
+.ch-item:hover::before { opacity:1; }
+.ch-num { font-family: var(--font-display); font-size: 36px; font-weight: 900; color: var(--accent); min-width: 60px; line-height: 1; }
+.ch-info { flex: 1; }
+.ch-title { font-size: 17px; font-weight: 800; color: #fff; margin-bottom: 4px; }
+.ch-desc { font-size: 13px; color: var(--text-2); line-height: 1.5; }
+.ch-tags { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
+.arch-overview {
+  max-width: 800px; margin: 40px auto; padding: 32px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+}
+.arch-title { font-size: 12px; font-weight: 800; letter-spacing: 3px; text-transform: uppercase; color: var(--text-3); margin-bottom: 20px; text-align: center; }
+.arch-layers { display: flex; flex-direction: column; gap: 12px; }
+.arch-row { display: flex; align-items: center; gap: 12px; }
+.arch-label { min-width: 90px; font-size: 11px; font-weight: 800; letter-spacing: 1.5px; color: var(--accent); text-transform: uppercase; }
+.arch-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.arch-chip { padding: 5px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; background: var(--bg-soft); border: 1px solid var(--border); color: var(--text-2); }
+.arch-chip.hl { border-color: var(--accent); color: var(--accent); background: rgba(122,162,247,.08); }
+.arch-arrow { text-align: center; color: var(--text-3); font-size: 18px; margin: 2px 0; padding-left: 90px; }
+.meta-info { max-width: 800px; margin: 60px auto 0; padding: 24px; background: var(--bg-soft); border-radius: 12px; border: 1px solid var(--border); }
+.meta-info h3 { font-size: 14px; color: var(--accent); margin-bottom: 10px; }
+.meta-info p { font-size: 13px; color: var(--text-2); margin: 4px 0; }
+</style>
+</head>
+<body>
+<div class="grid-bg"></div>
+<div style="padding:40px 20px;">
+
+<div class="index-hero">
+  <div style="font-size:11px; font-weight:800; letter-spacing:4px; text-transform:uppercase; color:var(--accent); margin-bottom:12px;">EGamePlay v3.0 · Deep Learning Guide</div>
+  <h1>EGamePlay <span class="accent">技能框架</span><br>源码学习文档</h1>
+  <p class="subtitle">面向系统线开发者的完整学习资料。9 个章节，覆盖从 ECS 底座到完整技能释放链路的每一行关键代码。</p>
+</div>
+
+<!-- Architecture Overview -->
+<div class="arch-overview">
+  <div class="arch-title">Framework Architecture Overview</div>
+  <div class="arch-layers">
+    <div class="arch-row">
+      <span class="arch-label">Config</span>
+      <div class="arch-chips">
+        <span class="arch-chip">Excel 配置表</span>
+        <span class="arch-chip">AbilityConfigObject</span>
+        <span class="arch-chip">ExecutionObject</span>
+      </div>
+    </div>
+    <div class="arch-arrow">↓</div>
+    <div class="arch-row">
+      <span class="arch-label">Model</span>
+      <div class="arch-chips">
+        <span class="arch-chip hl">CombatEntity</span>
+        <span class="arch-chip hl">Ability</span>
+        <span class="arch-chip">AbilityEffect</span>
+        <span class="arch-chip">AbilityTrigger</span>
+        <span class="arch-chip">FloatNumeric</span>
+        <span class="arch-chip">Action</span>
+      </div>
+    </div>
+    <div class="arch-arrow">↓</div>
+    <div class="arch-row">
+      <span class="arch-label">System</span>
+      <div class="arch-chips">
+        <span class="arch-chip">AbilitySystem</span>
+        <span class="arch-chip">Effect*System</span>
+        <span class="arch-chip">ExecutionSystem</span>
+        <span class="arch-chip">*ActionSystem</span>
+        <span class="arch-chip">TriggerSystem</span>
+      </div>
+    </div>
+    <div class="arch-arrow">↓</div>
+    <div class="arch-row">
+      <span class="arch-label">View</span>
+      <div class="arch-chips">
+        <span class="arch-chip">ViewSystem</span>
+        <span class="arch-chip">动画/粒子</span>
+        <span class="arch-chip">Unity Mono</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Chapter List -->
+<div class="chapter-list">
+  <div style="text-align:center; margin:50px 0 24px;">
+    <span style="font-size:11px; font-weight:800; letter-spacing:3px; text-transform:uppercase; color:var(--text-3);">Chapters</span>
+  </div>
+
+  <a href="ch01-ecsnode.html" class="ch-item">
+    <span class="ch-num">01</span>
+    <div class="ch-info">
+      <div class="ch-title">EcsNode — ECS 框架底座</div>
+      <div class="ch-desc">Entity 层级关系、Component 挂载机制、System 反射注册与 DriveType 生命周期驱动。理解整个框架的运行基础。</div>
+      <div class="ch-tags"><span class="badge blue">Framework</span><span class="badge purple">核心概念</span></div>
+    </div>
+  </a>
+
+  <a href="ch02-numeric.html" class="ch-item">
+    <span class="ch-num">02</span>
+    <div class="ch-info">
+      <div class="ch-title">FloatNumeric — 数值系统</div>
+      <div class="ch-desc">四层 Modifier 叠加公式、FloatModifierCollection 自动更新、AttributeComponent 属性管理。战斗数值的一切基础。</div>
+      <div class="ch-tags"><span class="badge green">Model</span><span class="badge warn">数值平衡</span></div>
+    </div>
+  </a>
+
+  <a href="ch03-combat-entity.html" class="ch-item">
+    <span class="ch-num">03</span>
+    <div class="ch-info">
+      <div class="ch-title">CombatEntity — 战斗实体</div>
+      <div class="ch-desc">战斗参与者的数据容器、所有组件的挂载关系、Action Ability 工厂接口、实体的创建与销毁。</div>
+      <div class="ch-tags"><span class="badge green">Model</span></div>
+    </div>
+  </a>
+
+  <a href="ch04-ability.html" class="ch-item">
+    <span class="ch-num">04</span>
+    <div class="ch-info">
+      <div class="ch-title">Ability — 技能/Buff 核心</div>
+      <div class="ch-desc">Ability 统一 Skill 和 Buff 的设计哲学、AbilitySystem 完整生命周期（Awake/Enable/Update/Disable）、配置加载与执行体绑定。</div>
+      <div class="ch-tags"><span class="badge blue">核心</span><span class="badge purple">设计哲学</span></div>
+    </div>
+  </a>
+
+  <a href="ch05-effect.html" class="ch-item">
+    <span class="ch-num">05</span>
+    <div class="ch-info">
+      <div class="ch-title">AbilityEffect — 效果系统</div>
+      <div class="ch-desc">7 种效果组件的完整源码分析、Effect 创建工厂、TriggerApply 分发逻辑、Effect → Action 转化模式。</div>
+      <div class="ch-tags"><span class="badge green">Model+System</span><span class="badge warn">关键</span></div>
+    </div>
+  </a>
+
+  <a href="ch06-trigger.html" class="ch-item">
+    <span class="ch-num">06</span>
+    <div class="ch-info">
+      <div class="ch-title">AbilityTrigger — 触发系统</div>
+      <div class="ch-desc">行为观察/时间状态观察/条件检查三种触发器、OnTrigger 完整流程、StateCheck 动态加载机制、触发 → 效果分发链路。</div>
+      <div class="ch-tags"><span class="badge purple">System</span></div>
+    </div>
+  </a>
+
+  <a href="ch07-execution.html" class="ch-item">
+    <span class="ch-num">07</span>
+    <div class="ch-info">
+      <div class="ch-title">AbilityExecution — 执行时间轴</div>
+      <div class="ch-desc">ExecutionObject 配置结构、ExecuteClipData 5 种 Clip 类型、时间轴驱动逻辑、ItemExecute 弹道系统、碰撞运动模式。</div>
+      <div class="ch-tags"><span class="badge warn">Config+System</span><span class="badge blue">视觉表现</span></div>
+    </div>
+  </a>
+
+  <a href="ch08-action.html" class="ch-item">
+    <span class="ch-num">08</span>
+    <div class="ch-info">
+      <div class="ch-title">Action — 行动系统</div>
+      <div class="ch-desc">IActionAbility/IActionExecute 接口、7 种 Action 实体、ActionSystem 8 阶段生命周期、DamageAction 完整伤害计算流程。</div>
+      <div class="ch-tags"><span class="badge green">System</span><span class="badge blue">执行核心</span></div>
+    </div>
+  </a>
+
+  <a href="ch09-config.html" class="ch-item">
+    <span class="ch-num">09</span>
+    <div class="ch-info">
+      <div class="ch-title">Configuration — 配置管线</div>
+      <div class="ch-desc">Excel → JSON → Runtime 配置流水线、AbilityConfigObject 效果配置、ExecutionObject 时间轴配置、完整的新技能制作流程。</div>
+      <div class="ch-tags"><span class="badge warn">Config</span><span class="badge green">实战</span></div>
+    </div>
+  </a>
+  <a href="diagrams.html" class="ch-item" style="border-color:var(--accent); background:rgba(122,162,247,.04);">
+    <span class="ch-num" style="color:var(--accent-2);">⬡</span>
+    <div class="ch-info">
+      <div class="ch-title">附录 · 架构图表集 (Mermaid)</div>
+      <div class="ch-desc">14 张交互式图表：分层架构图、类关系图、技能释放序列图、伤害计算序列、Buff 生命周期、Effect/Trigger 决策流程、Ability 状态机、数值计算流程、配置管线。</div>
+      <div class="ch-tags"><span class="badge blue">Mermaid</span><span class="badge purple">可交互</span><span class="badge green">全景</span></div>
+    </div>
+  </a>
+</div>
+
+<!-- Meta Info -->
+<div class="meta-info">
+  <h3>阅读指南</h3>
+  <p><strong>建议阅读顺序：</strong>Ch01 → Ch02 → Ch03 → Ch04 → Ch05 → Ch06 → Ch07 → Ch08 → Ch09</p>
+  <p><strong>前置知识：</strong>C# 基础、Unity MonoBehaviour 生命周期、基本 ECS 概念</p>
+  <p><strong>代码仓库：</strong>github.com/m969/EGamePlay (upstream) · Unity 2022.3.53f1</p>
+  <p><strong>如何阅读代码：</strong>每章包含完整源码 + 逐行注释 + 设计意图分析。建议对照 IDE 中的源文件一起看。</p>
+  <p><strong>每章时间：</strong>约 30-60 分钟精读。建议配合 IDE 断点调试加深理解。</p>
+</div>
+
+<div style="text-align:center; margin-top:60px; font-size:11px; color:var(--text-3); letter-spacing:.15em; text-transform:uppercase;">
+  EGamePlay Deep Learning Guide · v3.0 · Generated 2026.05.12
+</div>
+
+</div>
+</body>
+</html>
